@@ -28,15 +28,25 @@ ball_dx = 5   # horizontal speed
 ball_dy = -5  # vertical speed
 
 # bricks
+RAINBOW = [
+    (255, 0, 0),      # red
+    (255, 165, 0),    # orange
+    (255, 255, 0),    # yellow
+    (0, 255, 0),      # green
+    (0, 150, 255),    # blue
+    (128, 0, 255),    # purple
+    (150, 200, 255)   # light blue
+]
 BRICK_ROWS = 7
 BRICK_COLUMNS = 10
 BRICK_WIDTH = WIDTH // BRICK_COLUMNS
-BRICK_HEIGHT = 40
+BRICK_HEIGHT = 20
 bricks = []
 for row in range(BRICK_ROWS):
     for col in range(BRICK_COLUMNS):
         brick = pygame.Rect(col * BRICK_WIDTH, 50 + row * BRICK_HEIGHT, BRICK_WIDTH - 2, BRICK_HEIGHT - 2)
-        bricks.append(brick)
+        color = RAINBOW[row % len(RAINBOW)]
+        bricks.append((brick, color))
 
 
 # - main method / loop -
@@ -72,12 +82,12 @@ while running:
 
     # cheat mode
     if ball_y - BALL_RADIUS > HEIGHT:
-        # ball_x = WIDTH // 2
-        # ball_y = HEIGHT // 2
-        # ball_dx = 5
-        # ball_dy = -5
+        ball_x = WIDTH // 2
+        ball_y = HEIGHT // 2
+        ball_dx = 5
+        ball_dy = -5
 
-        pygame.quit() # lowkey just ends the game right now lmao
+        # pygame.quit() # lowkey just ends the game right now lmao
 
     # paddle collisions
     ball_rect = pygame.Rect(ball_x - BALL_RADIUS, ball_y - BALL_RADIUS, BALL_RADIUS * 2, BALL_RADIUS * 2)
@@ -85,7 +95,7 @@ while running:
         ball_dy = -ball_dy
 
     # brick collisions
-    hit_index = ball_rect.collidelist(bricks)
+    hit_index = ball_rect.collidelist([b[0] for b in bricks])
     if hit_index != -1:
         hit_brick = bricks.pop(hit_index)
         ball_dy = -ball_dy
@@ -93,8 +103,8 @@ while running:
 
     # building game
     screen.fill(BLACK)
-    for brick in bricks:
-        pygame.draw.rect(screen, BRICK_COLOR, brick)
+    for brick, color in bricks:
+        pygame.draw.rect(screen, color, brick)
 
     # draw paddle
     pygame.draw.rect(screen, PADDLE_COLOR, paddle)
