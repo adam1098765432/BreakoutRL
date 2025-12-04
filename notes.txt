@@ -1,0 +1,52 @@
+class State:
+  def to_tensor
+  def from_tensor
+
+class Action:
+  def to_tensor
+  def from_tensor
+
+state: [
+  paddle_x,
+  paddle_y,
+  ball_x,
+  ball_y,
+  ball_vx,
+  ball_vy,
+  ...bricks (1 or 0)
+]
+
+action: [
+  move_left
+  move_right
+  dont_move
+] # use BCELoss
+
+def show_state(state):
+  # create renderer
+  # call render(screen, state)
+
+def render(screen, state):
+  # display the state in a window
+  # draw on the screen
+
+def update(state, action, delta_time=1):
+  # paddle
+  if action == 0: # move_left
+    state.paddle_x -= speed * delta_time
+  if action == 1: # move right
+    state.paddle_x += speed * delta_time
+
+  # TODO: ball
+
+  # TODO: bricks
+
+  # TODO: calculate reward (could be None)
+  if brick_destroyed:
+    reward = 1
+  else:
+    reward = 0
+
+  return state, reward
+
+
