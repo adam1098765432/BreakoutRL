@@ -22,6 +22,10 @@ action: [
   dont_move
 ] # use BCELoss
 
+def show_state(state):
+  # create renderer
+  # call render(screen, state)
+
 def render(screen, state):
   # display the state in a window
   # draw on the screen
