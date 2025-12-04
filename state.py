@@ -11,7 +11,7 @@ class State:
     self.bricks = [1] * n_bricks
 
   @staticmethod
-  def to_tensor(self, state):
+  def to_tensor(state):
     return torch.tensor([
       state.paddle_x,
       state.paddle_y,
@@ -23,7 +23,7 @@ class State:
     ])
   
   @staticmethod
-  def from_tensor(self, tensor):
+  def from_tensor(tensor):
     # TODO: Normalize values between -1 and 1
     state = State()
     state.paddle_x = tensor[0]

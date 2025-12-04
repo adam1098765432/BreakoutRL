@@ -7,9 +7,9 @@ class Action:
     self.dont_move = dont_move
 
   @staticmethod
-  def to_tensor(self, action):
+  def to_tensor(action):
     return torch.tensor([action.move_left, action.move_right, action.dont_move])
   
   @staticmethod
-  def from_tensor(self, tensor):
+  def from_tensor(tensor):
     return Action(tensor[0], tensor[1], tensor[2])
