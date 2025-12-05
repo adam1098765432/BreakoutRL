@@ -23,9 +23,9 @@ class State:
     ])
   
   @staticmethod
-  def from_tensor(tensor):
+  def from_tensor(tensor, n_bricks):
     # TODO: Normalize values between -1 and 1
-    state = State()
+    state = State(n_bricks)
     state.paddle_x = tensor[0]
     state.paddle_y = tensor[1]
     state.ball_x = tensor[2]

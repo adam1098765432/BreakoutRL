@@ -1,7 +1,7 @@
 import torch
 
 class Action:
-  def __init__(self, move_left, move_right, dont_move):
+  def __init__(self, move_left=0, move_right=1, dont_move=2):
     self.move_left = move_left
     self.move_right = move_right
     self.dont_move = dont_move
