@@ -1,17 +1,38 @@
 """
 Terms
-- Policy: Move to play
-- Value: Predicted winner or final score
-- Immediate Reward: Reward for taking an action
+- Policy: The probability of taking an action given a state
+- Value: The predicted winner or final score
+- Immediate Reward: The reward for taking an action
+- Trajectories: A sequence of states and actions
 
 MuZero
+- Learns a latent model of the environment
 - Uses Monte Carlo Tree Search (MCTS)
-- Requires past observations (frames/states) and actions to be stored
+- Requires past sequences of observations (frames/states) and actions to be stored
 - Actions are encoded as constant bias planes
 - MCTS predicts the next state using the previous state and action
   - Only masks valid actions at the root of the search tree
 - MCTS can proceed past a terminal node, and is expected to return the same terminal state
 
+Functions
+- h: Representation function (predicts latent representation for a given state)
+- g: Dynamics function (predicts next state and immediate reward given previous state and action)
+  - r^k: Reward network (predicts immediate reward for a given state and action)
+  - s^k: State network (predicts next state for a given state and action)
+- f: Prediction function
+  - p^k: Policy network (predicts the immediate action probabilities for a given state)
+  - v^k: Value network (predicts the final reward for a given state)
+  
 Loss
- - CELoss()
+- Loss = MSE(reward) + MSE(value) + CELoss(policy) + L2_Regularization
+- L2_Regularization (weight decay) = theta_f + theta_h + theta_g
+
+Replay Buffer
+- Stores trajectories: K * (prev_state, next_state, action, reward, is_done)
+
+Targets
+- Value target: the discounted cumulative rewards over multiple timesteps
+- Policy target: the final action probabilities from the MCTS search tree
+  (normalized visit counts from MCTS at the root)
+- Reward target: the observed immediate reward at each step
 """
