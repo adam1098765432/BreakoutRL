@@ -49,6 +49,7 @@ import torch.nn.functional as F
 STATE_SIZE = 10
 ACTION_SIZE = 3
 SUPPORT_SIZE = 101 # Categorical reward and value [-50, 50] (see Appendix F of MuZero paper)
+K_STEPS = 5
 
 def upper_confidence_bound(mcts_score, total_mcts_value, policy_score, parent_visits, child_visits, c1=1.25, c2=19652):
   """
@@ -73,6 +74,18 @@ def scale_targets(x, eps=1e-3):
   :param eps: Epsilon
   """
   return np.sign(x) * (np.sqrt(np.abs(x) + 1) - 1 + eps * x)
+
+def one_hot_score(x):
+  """
+  One-hot encoding for the reward and value
+  
+  :param x: The target (value or reward)
+  """
+  if x < -SUPPORT_SIZE // 2 or x > SUPPORT_SIZE // 2:
+    raise ValueError(f"x must be between -{SUPPORT_SIZE // 2} and {SUPPORT_SIZE // 2}")
+  arr = np.zeros(SUPPORT_SIZE)
+  arr[x + 50] = 1
+  return arr
 
 class ReplayBuffer:
   """
@@ -148,9 +161,17 @@ class ResBlock(nn.Module):
 class DynamicsModel(nn.Module):
   """
   Model Architecture Based On: https://arxiv.org/pdf/1603.05027<br>
-  This model predicts the next state and reward given previous states and actions.
+  Two-headed model for predicting next state and reward from a state and action.
   Usually, you pass in multiple previous states and actions, but for now we will
   only pass in a single previous state and action. This may make it harder to train.
+
+  ### Note
+  MuZero Appendix G says to scale the gradient of the dynamics function by 0.5.
+  To do this, the input state is multiplied by 0.5.
+
+  ### Note
+  MuZero Appendix G says to scale the hidden state after running the dynamics
+  function to [0, 1] (once per unroll step).
 
   :param latent_size: The number of channels in the latent representation.
   :param n_blocks: The number of residual blocks.
@@ -158,11 +179,28 @@ class DynamicsModel(nn.Module):
   def __init__(self, latent_size=16, n_blocks=3):
     super().__init__()
     self.first = nn.Linear(STATE_SIZE + ACTION_SIZE, latent_size)
-    self.model = nn.Sequential([ResBlock(latent_size) for _ in range(n_blocks)])
-    self.state = nn.Linear(latent_size, STATE_SIZE)
+    self.model = nn.Sequential(*[ResBlock(latent_size) for _ in range(n_blocks)])
+    self.latent = nn.Linear(latent_size, STATE_SIZE)
     self.reward = nn.Linear(latent_size, SUPPORT_SIZE)
 
-  def forward(self, x):
+  def forward(self, latent, action):
+    latent = latent * 0.5 # Gradient Scaling
+    x = torch.cat([latent, action], dim=1)
     x = F.relu(self.first(x))
     x = self.model(x)
-    return self.state(x), self.reward(x)
+    latent = F.relu(self.latent(x))
+    reward = self.reward(x)
+    state_mins = latent.min(dim=1, keepdim=True)[0]
+    state_maxs = latent.max(dim=1, keepdim=True)[0]
+    latent = (latent - state_mins) / (state_maxs - state_mins + 1e-6)
+    return latent, reward
+
+def train():
+  """
+  Training loop.
+  
+  ### Note
+  Remember to scale the loss by 1 / K_STEPS to ensure the gradient has a similar magnitude
+  regardless of the number of unroll steps.
+  """
+  pass
