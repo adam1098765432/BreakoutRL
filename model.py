@@ -133,8 +133,8 @@ class PredictionModel(nn.Module):
     self.policy = nn.Linear(latent_size, ACTION_SIZE)
     self.value = nn.Linear(latent_size, SUPPORT_SIZE)
 
-  def forward(self, x):
-    x = F.relu(self.fc1(x))
+  def forward(self, state):
+    x = F.relu(self.fc1(state))
     x = F.relu(self.fc2(x))
     return self.policy(x), self.value(x)
 
@@ -194,6 +194,51 @@ class DynamicsModel(nn.Module):
     state_maxs = latent.max(dim=1, keepdim=True)[0]
     latent = (latent - state_mins) / (state_maxs - state_mins + 1e-6)
     return latent, reward
+
+class Node:
+  """
+  Node in the MCTS search tree.
+  """
+  def __init__(self, state, action, parent=None):
+    self.state = state
+    self.action = action
+    self.parent = parent
+    self.mcts_value = 0
+    self.visits = 0
+    self.children = []
+
+  def backprop_value(self, value, decay=0.95):
+    """
+    Incomplete: Read MuZero Appendix B
+    """
+    self.mcts_value += value
+    for child in self.children:
+      child.backprop_value(value * decay, decay)
+
+class MCTS:
+  """
+  The MCTS search tree for the MuZero model.
+  """
+  def __init__(self):
+    pass
+
+  def search(self, root):
+    """
+    ### Selection
+    Select the action with the highest upper confidence bound.
+    Repeat until a leaf node (s^l, a^l) is reached.
+    ### Expansion
+    Reward and state are computed by the dynamics function and stored in tables.
+    Policy and value are computed by the prediction function.
+    A new node (s^l, a^l) is added to the search tree.
+    Each edge is initialized to N=0, Q=0, P=p^l.
+    ### Backup
+    Incomplete: Read MuZero Appendix B
+    """
+    pass
+
+  def rollout(self, leaf):
+    pass
 
 def train():
   """
