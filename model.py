@@ -45,7 +45,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import heapq
 
 STATE_SIZE = 10
 ACTION_SIZE = 3
@@ -281,7 +280,7 @@ class MCTS:
       
       for idx, child in enumerate(node.children):
         mcts_value = child.mcts_value
-        policy_score = child.policy_score
+        policy_score = child.policy_score[idx]
         parent_visits = node.visits
         child_visits = child.visits
         child_ucb = upper_confidence_bound(mcts_value, policy_score, parent_visits, child_visits)
@@ -317,7 +316,7 @@ class MCTS:
     policy, value = self.prediction_model(state)
     child.state = state
     child.action = action
-    child.policy_score = policy
+    child.policy_score = F.softmax(policy)
     child.reward = reward
     child.mcts_value = value
     child.G_k = value
