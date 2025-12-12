@@ -45,17 +45,18 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import heapq
 
 STATE_SIZE = 10
 ACTION_SIZE = 3
 SUPPORT_SIZE = 101 # Categorical reward and value [-50, 50] (see Appendix F of MuZero paper)
 K_STEPS = 5
 
-def upper_confidence_bound(mcts_score, total_mcts_value, policy_score, parent_visits, child_visits, c1=1.25, c2=19652):
+def upper_confidence_bound(mcts_value, policy_score, parent_visits, child_visits, c1=1.25, c2=19652):
   """
-  The mcts_score is normalized across all actions [0, 1].
+  The mcts_value should be normalized across all actions [0, 1].
   
-  :param mcts_score: The propogated score from MCTS.
+  :param mcts_value: The propogated score from MCTS.
   :param total_mcts_value: The propogated scores for all actions from the parent node.
   :param policy_score: The score of the action predicted by the policy.
   :param parent_visits: The number of times the parent node has been visited.
@@ -63,7 +64,7 @@ def upper_confidence_bound(mcts_score, total_mcts_value, policy_score, parent_vi
   :param c1: The exploration weight.
   :param c2: The exploration decay.
   """
-  return mcts_score / total_mcts_value + policy_score * np.sqrt(parent_visits) / (1 + child_visits) * (c1 + np.log((parent_visits + c2 + 1) / c2))
+  return mcts_value + policy_score * np.sqrt(parent_visits) / (1 + child_visits) * (c1 + np.log((parent_visits + c2 + 1) / c2))
 
 def scale_targets(x, eps=1e-3):
   """
@@ -83,8 +84,18 @@ def one_hot_score(x):
   """
   if x < -SUPPORT_SIZE // 2 or x > SUPPORT_SIZE // 2:
     raise ValueError(f"x must be between -{SUPPORT_SIZE // 2} and {SUPPORT_SIZE // 2}")
-  arr = np.zeros(SUPPORT_SIZE)
+  arr = torch.zeros(SUPPORT_SIZE)
   arr[x + 50] = 1
+  return arr
+
+def one_hot_action(x):
+  """
+  One-hot encoding for the action
+
+  :param x: The action index
+  """
+  arr = torch.zeros(ACTION_SIZE)
+  arr[x] = 1
   return arr
 
 class ReplayBuffer:
@@ -118,7 +129,6 @@ class ReplayBuffer:
 
     :param mcts_value: The search value for the replay sample
     :param target_value: The target value from the replay sample
-    :param total_mcts_value: The total search value for all replay samples
     """
     return np.abs(mcts_value - target_value) # Don't forget to normalize to get the probability!
 
@@ -180,65 +190,143 @@ class DynamicsModel(nn.Module):
     super().__init__()
     self.first = nn.Linear(STATE_SIZE + ACTION_SIZE, latent_size)
     self.model = nn.Sequential(*[ResBlock(latent_size) for _ in range(n_blocks)])
-    self.latent = nn.Linear(latent_size, STATE_SIZE)
+    self.state = nn.Linear(latent_size, STATE_SIZE)
     self.reward = nn.Linear(latent_size, SUPPORT_SIZE)
 
-  def forward(self, latent, action):
-    latent = latent * 0.5 # Gradient Scaling
-    x = torch.cat([latent, action], dim=1)
+  def forward(self, state, action):
+    state = state * 0.5 # Gradient Scaling
+    x = torch.cat([state, action], dim=1)
     x = F.relu(self.first(x))
     x = self.model(x)
-    latent = F.relu(self.latent(x))
+    state = F.relu(self.state(x))
     reward = self.reward(x)
-    state_mins = latent.min(dim=1, keepdim=True)[0]
-    state_maxs = latent.max(dim=1, keepdim=True)[0]
-    latent = (latent - state_mins) / (state_maxs - state_mins + 1e-6)
-    return latent, reward
+    state_mins = state.min(dim=1, keepdim=True)[0]
+    state_maxs = state.max(dim=1, keepdim=True)[0]
+    state = (state - state_mins) / (state_maxs - state_mins + 1e-6)
+    return state, reward
 
 class Node:
   """
   Node in the MCTS search tree.
   """
+  largest_Q = []
+
   def __init__(self, state, action, parent=None):
     self.state = state
-    self.action = action
     self.parent = parent
-    self.mcts_value = 0
     self.visits = 0
+    self.G_k = 0
     self.children = []
+    self.action = action
+    self.reward = 0
+    self.mcts_value = 0
+    self.policy_score = 0
 
-  def backprop_value(self, value, decay=0.95):
+  def backprop(self, child):
     """
-    Incomplete: Read MuZero Appendix B
+    Based on the MuZero Appendix B
+      G_k = sum from rho=0 to l-1-k of gamma^rho * r_{k+1+rho} + gamma^(l-k) * v^l
+      For k=l...0, we form an l-k step estimate of the cumulative discounted reward
+    
+    Convert to recurrence relation:
+      G_k = r_{k+1} + gamma * G_{k+1}
+    
+    mcts_value recurrence relation:
+      Q_k = (N_k * Q_k + G_k) / (N_k + 1)
+    
+    visits recurrence relation:
+      N_k = N_k + 1
+    
+    Legend:
+      gamma = discount factor
+      G = cumulative discounted reward
+      r = reward
+      N = number of visits
+      Q = mcts_value
+      l = leaf node
+      k = parent node (this node)
+      k+1 = child node (argument)
     """
-    self.mcts_value += value
-    for child in self.children:
-      child.backprop_value(value * decay, decay)
+    gamma = 0.95 # Discount factor
+    r_kp1 = child.reward # Immediate reward
+    G_kp1 = child.G_k # Cumulative discounted reward
+
+    # Update formulas denoted in MuZero Appendix B
+    self.G_k = r_kp1 + gamma * G_kp1
+    self.mcts_value = (self.visits * self.mcts_value + self.G_k) / (self.visits + 1)
+    self.visits += 1
 
 class MCTS:
   """
   The MCTS search tree for the MuZero model.
+  ### Note:
+  There is no rollout since a value estimate is used instead.
   """
-  def __init__(self):
-    pass
+  def __init__(self, dynamics_model, prediction_model):
+    self.dynamics_model = dynamics_model
+    self.prediction_model = prediction_model
 
   def search(self, root):
     """
     ### Selection
     Select the action with the highest upper confidence bound.
     Repeat until a leaf node (s^l, a^l) is reached.
+    """
+    node = root
+    action_idx = None
+
+    while node.children != []:
+      best_ucb = -float('inf')
+      best_child = None
+      
+      for idx, child in enumerate(node.children):
+        mcts_value = child.mcts_value
+        policy_score = child.policy_score
+        parent_visits = node.visits
+        child_visits = child.visits
+        child_ucb = upper_confidence_bound(mcts_value, policy_score, parent_visits, child_visits)
+        
+        if child_ucb > best_ucb:
+          best_ucb = child_ucb
+          best_child = child
+          action_idx = idx
+
+      node = best_child
+
+    self.expand(node, one_hot_action(action_idx))
+
+  def expand(self, child, action):
+    """
     ### Expansion
     Reward and state are computed by the dynamics function and stored in tables.
+    In this case, they are stored in the child node.
     Policy and value are computed by the prediction function.
     A new node (s^l, a^l) is added to the search tree.
     Each edge is initialized to N=0, Q=0, P=p^l.
-    ### Backup
-    Incomplete: Read MuZero Appendix B
-    """
-    pass
 
-  def rollout(self, leaf):
-    pass
+    :param child: The node to expand
+    :param action: The action that led to the child node
+    """
+    # Expand child node
+    for _ in range(ACTION_SIZE):
+      child_child = Node(None, None, child)
+      child.children.append(child_child)
+
+    # Compute statistics for child
+    state, reward = self.dynamics_model(child.parent.state, action)
+    policy, value = self.prediction_model(state)
+    child.state = state
+    child.action = action
+    child.policy_score = policy
+    child.reward = reward
+    child.mcts_value = value
+    child.G_k = value
+
+    # Backup
+    node = child
+    while node.parent is not None:
+      node.parent.backprop(node)
+      node = node.parent
 
 def train():
   """
