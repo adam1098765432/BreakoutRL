@@ -51,6 +51,14 @@ ACTION_SIZE = 3
 SUPPORT_SIZE = 101 # Categorical reward and value [-50, 50] (see Appendix F of MuZero paper)
 K_STEPS = 5
 
+def get_device():
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        return torch.device("mps")
+    else:
+        return torch.device("cpu")
+
 def upper_confidence_bound(mcts_score, total_mcts_value, policy_score, parent_visits, child_visits, c1=1.25, c2=19652):
   """
   The mcts_score is normalized across all actions [0, 1].
@@ -86,6 +94,21 @@ def one_hot_score(x):
   arr = np.zeros(SUPPORT_SIZE)
   arr[x + 50] = 1
   return arr
+
+def categorical_to_scalar(logits):
+  """
+  MuZero Appendix F: Convert categorical to a scalar
+  """
+  probs = F.softmax(logits, dim=-1)
+  device = probs.device
+  support = torch.arange(
+      -SUPPORT_SIZE // 2,
+      SUPPORT_SIZE // 2 + 1,
+      dtype=torch.float32,
+      device=device
+  )
+  x = (probs * support.unsqueeze(0)).sum(dim=-1)
+  return x
 
 class ReplayBuffer:
   """
@@ -206,39 +229,169 @@ class Node:
     self.mcts_value = 0
     self.visits = 0
     self.children = []
+    self.prior = 0.0
+    self.reward = 0.0
 
   def backprop_value(self, value, decay=0.95):
     """
-    Incomplete: Read MuZero Appendix B
+    Backup step (MuZero Appendix B).
+    Propagates value back to the root including rewards on edges
     """
-    self.mcts_value += value
-    for child in self.children:
-      child.backprop_value(value * decay, decay)
+    node = self
+    discount = 1.0
+
+    # Walk up the tree to the root
+    while node is not None:
+      node.visits += 1
+      node.mcts_value += value
+
+      value = node.reward + decay * value
+      node = node.parent
 
 class MCTS:
   """
   The MCTS search tree for the MuZero model.
   """
-  def __init__(self):
-    pass
+  def __init__(self, prediction_model, dynamics_model,
+               n_simulations=50, discount=0.95,
+               c1=1.25, c2=19652, device=None):
 
-  def search(self, root):
-    """
-    ### Selection
-    Select the action with the highest upper confidence bound.
-    Repeat until a leaf node (s^l, a^l) is reached.
-    ### Expansion
-    Reward and state are computed by the dynamics function and stored in tables.
-    Policy and value are computed by the prediction function.
-    A new node (s^l, a^l) is added to the search tree.
-    Each edge is initialized to N=0, Q=0, P=p^l.
-    ### Backup
-    Incomplete: Read MuZero Appendix B
-    """
-    pass
+      self.prediction_model = prediction_model
+      self.dynamics_model = dynamics_model
+      self.n_simulations = n_simulations #Number of MCTS simulations per search
+      self.discount = discount #Discount factor for backing up values
+      self.c1 = c1 #Exploration constant (pUCT)
+      self.c2 = c2 #Exploration constant (pUCT decay).
+      self.device = device or get_device()
+
+      self.prediction_model.to(self.device)
+      self.dynamics_model.to(self.device)
+
+  def _select_child(self, node):
+      """
+      Selection step (MuZero Appendix B).
+      Selects the child with the highest pUCT score.
+      """
+      # If no children yet, this is a leaf.
+      if not node.children:
+          return None
+
+      # Compute Q estimates for children.
+      q_values = []
+      for child in node.children:
+          if child.visits > 0:
+              q = child.mcts_value / child.visits
+          else:
+              q = 0.0
+          q_values.append(q)
+
+      total_mcts_value = sum(q_values) + 1e-8
+      parent_visits = max(1, node.visits)
+
+      best_score = -float("inf")
+      best_child = None
+
+      for child, q in zip(node.children, q_values):
+          ucb = upper_confidence_bound(
+              mcts_score=q,
+              total_mcts_value=total_mcts_value,
+              policy_score=child.prior,
+              parent_visits=parent_visits,
+              child_visits=child.visits,
+              c1=self.c1,
+              c2=self.c2
+          )
+          if ucb > best_score:
+              best_score = ucb
+              best_child = child
+
+      return best_child
 
   def rollout(self, leaf):
-    pass
+      """
+      Expansion step (Appendix B).
+      Uses the dynamics function to generate next states and rewards for
+      all possible actions, and the prediction function to get the policy
+      and value at the leaf state.
+      """
+      # Ensure state is a tensor on the correct device.
+      if isinstance(leaf.state, np.ndarray):
+          state_tensor = torch.tensor(leaf.state, dtype=torch.float32, device=self.device)
+      else:
+          state_tensor = leaf.state.to(self.device).float()
+      state_tensor = state_tensor.unsqueeze(0)  # (1, STATE_SIZE)
+
+      with torch.no_grad():
+          # Prediction model at leaf state: policy and value.
+          policy_logits, value_logits = self.prediction_model(state_tensor)
+          policy = F.softmax(policy_logits, dim=-1)[0].cpu().numpy()  # (ACTION_SIZE,)
+          value = categorical_to_scalar(value_logits)[0].item()  # scalar leaf value
+
+          # Expand children for all actions using dynamics model.
+          for a in range(ACTION_SIZE):
+              a_onehot = F.one_hot(
+                  torch.tensor([a], device=self.device),
+                  num_classes=ACTION_SIZE
+              ).float()  # (1, ACTION_SIZE)
+
+              next_latent, reward_logits = self.dynamics_model(state_tensor, a_onehot)
+              next_state = next_latent[0].detach()  # (STATE_SIZE,)
+              reward = categorical_to_scalar(reward_logits)[0].item()  # scalar reward
+
+              child = Node(state=next_state, action=a, parent=leaf)
+              child.prior = float(policy[a])
+              child.reward = float(reward)
+              leaf.children.append(child)
+
+      return value
+
+  def search(self, root):
+      """
+      Full MCTS search (MuZero Appendix B).
+      Runs multiple simulations starting from the root node and returns
+      a policy proportional to visit counts and a root value estimate.
+      """
+      self.prediction_model.eval()
+      self.dynamics_model.eval()
+
+      # If root has no children yet, expand it once.
+      if not root.children:
+          _ = self.rollout(root)
+
+      for _ in range(self.n_simulations):
+          node = root
+
+          # Selection: descend the tree until a leaf.
+          while node.children:
+              next_node = self._select_child(node)
+              if next_node is None:
+                  break
+              node = next_node
+
+          # Expansion and evaluation at the leaf.
+          leaf_value = self.rollout(node)
+
+          # Backup: propagate leaf_value back to the root.
+          node.backprop_value(leaf_value, decay=self.discount)
+
+      # Build policy from root children visit counts.
+      visits = np.array([child.visits for child in root.children], dtype=np.float32)
+      if visits.sum() > 0:
+          policy = visits / visits.sum()
+      else:
+          policy = np.ones(len(root.children), dtype=np.float32) / len(root.children)
+
+      # Root value estimate as visit-weighted mean Q.
+      if visits.sum() > 0:
+          q_values = np.array([
+              child.mcts_value / child.visits if child.visits > 0 else 0.0
+              for child in root.children
+          ])
+          root_value = float((q_values * visits).sum() / visits.sum())
+      else:
+          root_value = 0.0
+
+      return policy, root_value
 
 def train():
   """
