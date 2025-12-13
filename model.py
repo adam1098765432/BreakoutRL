@@ -40,7 +40,6 @@ Categorical reward and value
 - Rewards and values are encoded as probability distributions for scores -300 to 300
 - Targets are mapped to this distribution (phi)
 """
-import random
 
 """
 TODO:
@@ -54,6 +53,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import random
 
 
 MAX_FLOAT = float('inf')
@@ -62,6 +62,7 @@ ACTION_SIZE = 3
 SUPPORT_SIZE = 101 # Categorical reward and value [-50, 50] (see Appendix F of MuZero paper)
 K_STEPS = 5
 DISCOUNT_FACTOR = 0.997
+MAX_MOVES = 50 * 100
 
 class MinMaxStats:
   def __init__(self, min_val=None, max_val=None):
@@ -238,6 +239,13 @@ class Network:
   def __init__(self, dynamics_model: DynamicsModel, prediction_model: PredictionModel):
     self.dynamics_model = dynamics_model
     self.prediction_model = prediction_model
+    self.training_steps = 0
+
+  def initial_forward(self, state: torch.Tensor):
+    value = 0
+    reward = 0
+    policy = [1 / ACTION_SIZE] * ACTION_SIZE
+    return NetworkOutput(state, reward, policy, value)
 
   def forward(self, state: torch.Tensor, action: int):
     action = one_hot_action(action)
@@ -267,7 +275,7 @@ class Node:
     self.to_play = -1
     self.prior = prior
     self.value_sum = 0
-    self.children = {}
+    self.children: dict[int, Node] = {}
     self.hidden_state = None
     self.reward = 0
 
@@ -289,6 +297,13 @@ class MCTS:
   def __init__(self, network: Network):
     self.network = network
     self.n_simulations = 50
+
+  def select_action(self, node: Node, num_moves: int) -> int:
+    actions = node.children.keys()
+    visit_counts = [child.visit_count for child in node.children.values()]
+    temp = get_temperature(num_moves, self.network.training_steps)
+    action_idx = torch.multinomial(torch.tensor(visit_counts) ** (1 / temp), num_samples=1).item()
+    return list(actions)[action_idx]
 
   def select_child(self, node: Node, min_max_stats: MinMaxStats):
     _, action, child = max((
@@ -335,22 +350,8 @@ class MCTS:
       min_max_stats.update(node.value())
       value = node.reward + DISCOUNT_FACTOR * value
 
-def get_root_node(pred: PredictionModel):
-  root = Node(prior=1.0)
-  root.hidden_state = torch.randn(1, STATE_SIZE) # TODO: Replace with the initial state
-  root.reward = 0
-
-  policy_logits, value = pred(root.hidden_state)
-  policy = F.softmax(policy_logits, dim=1)[0].tolist()
-
-  root.value_sum = one_hot_score_to_scaler(value[0]).item()
-  root.visit_count = 1
-
-  for i in range(ACTION_SIZE):
-    child = Node(policy[i])
-    root.children[i] = child
-
-  return root
+def get_temperature(num_moves, training_steps):
+  return 1
 
 def scale_targets(x, eps=1e-3):
   """
@@ -406,46 +407,6 @@ def ucb_score(parent: Node, child: Node, min_max_stats: MinMaxStats, c1=1.25, c2
 
 """ Self-play """
 
-class Environment:
-  pass
-
-class Game:
-  def __init__(self, action_space_size: int, discount_factor: float):
-    self.environment = Environment()
-    self.history = []
-    self.rewards = []
-    self.child_visits = []
-    self.root_values = []
-    self.action_space_size = action_space_size
-    self.discount_factor = discount_factor
-
-  def terminal(self):
-    return False
-  
-  def legal_actions(self):
-    return [i for i in range(self.action_space_size)]
-  
-  def apply(self, action: int):
-    pass
-
-  def store_search_stats(self, root: Node):
-    """
-    Store the proportion of visits to each child and the mean value of the root
-    
-    :param root: The root node
-    """
-    sum_visits = sum(child.visit_count for child in root.children.values())
-    self.child_visits.append([
-      root.children[i].visit_count / sum_visits if i in root.children else 0
-      for i in range(self.action_space_size)
-    ])
-    self.root_values.append(root.value())
-
-def play_game(network: Network):
-  pass
-
-""" Training """
-
 class NetworkBuffer:
   def __init__(self):
     self.networks = {}
@@ -458,6 +419,133 @@ class NetworkBuffer:
     
   def save_network(self, step, network):
     self.networks[step] = network
+
+class Environment:
+  def step(self, action: int):
+    """
+    Take a step in the environment
+    
+    :param action: The action
+    :return: The reward
+    """
+    return 0
+
+  def terminal(self):
+    return False
+
+class Game:
+  """
+  A single episode of interaction with the environment.
+  """
+
+  def __init__(self, action_space_size: int, discount_factor: float):
+    self.environment = Environment()
+    self.history = []
+    self.rewards = []
+    self.child_visits = []
+    self.root_values = []
+    self.action_space_size = action_space_size
+    self.discount_factor = discount_factor
+
+  def terminal(self):
+    return self.environment.terminal()
+  
+  def legal_actions(self):
+    return [i for i in range(self.action_space_size)]
+  
+  def apply(self, action: int):
+    reward = self.environment.step(action)
+    self.rewards.append(reward)
+    self.history.append(action)
+
+  def store_search_stats(self, root: Node):
+    """
+    This function is called after a full MCTS search.
+    
+    ### Store:
+    1. Proportion of visits to each child (policy target)
+    2. Mean value of the root (part of the value target)
+    
+    :param root: The root node
+    """
+    sum_visits = sum(child.visit_count for child in root.children.values())
+    self.child_visits.append([
+      root.children[i].visit_count / sum_visits if i in root.children else 0
+      for i in range(self.action_space_size)
+    ])
+    self.root_values.append(root.value())
+
+  def get_targets(self, start_state_idx, unroll_steps, td_steps):
+    """
+    The objective of this function is to compute the targets
+    (value, reward, policy) for the replay buffer.
+    
+    :param state_idx: The index of the initial state for this trajectory
+    :param unroll_steps: The length of the trajectory
+    :param td_steps: The number of steps to look ahead
+    """
+    targets = []
+
+    for current_state_idx in range(start_state_idx, start_state_idx + unroll_steps + 1):
+      # First we grab the boostrap value if it exists
+      boostrap_state_idx = current_state_idx + td_steps
+
+      if boostrap_state_idx < len(self.root_values):
+        value = self.root_values[boostrap_state_idx] * self.discount_factor ** td_steps
+      else:
+        value = 0
+
+      # Now we add the sum of all the individual rewards up to the bootstrap state to the value
+      for i, reward in enumerate(self.rewards[current_state_idx:boostrap_state_idx]):
+        value += reward * self.discount_factor ** i
+
+      # The reward predicted will be the reward before the current state
+      if current_state_idx > 0 and current_state_idx < len(self.rewards):
+        last_reward = self.rewards[current_state_idx - 1]
+      else:
+        last_reward = 0
+      
+      # The policy is taken from the proportion of visits to each action
+      policy = self.child_visits[current_state_idx]
+
+      # Finally, we append the targets
+      if current_state_idx < len(self.root_values):
+        targets.append((value, last_reward, policy))
+      else:
+        # States past the end of games are absorbing states
+        uniform_policy = [1 / self.action_space_size] * self.action_space_size
+        targets.append((0, last_reward, uniform_policy))
+
+    return targets
+
+  def get_initial_state(self):
+    return torch.zeros(size=(1, STATE_SIZE))
+
+def get_root_node(mcts: MCTS, game: Game):
+  root = Node(0)
+  current_state = game.get_initial_state()
+  network_output = mcts.network.initial_forward(current_state, 0)
+  mcts.expand_node(root, network_output)
+  return root
+
+def run_selfplay(replay_buffer: ReplayBuffer, network_buffer: NetworkBuffer, iterations: int):
+  for _ in range(iterations):
+    game = play_game(MCTS(network_buffer.latest_network()))
+    replay_buffer.add_game(game)
+
+def play_game(mcts: MCTS):
+  game = Game(action_space_size=ACTION_SIZE, discount_factor=DISCOUNT_FACTOR)
+
+  while not game.terminal() and len(game.history) < MAX_MOVES:
+    root = get_root_node(mcts, game)
+    mcts.search(root, game.history.copy())
+    action = mcts.select_action(root)
+    game.apply(action)
+    game.store_search_stats(root)
+  
+  return game
+
+""" Training """
 
 def train():
   """
