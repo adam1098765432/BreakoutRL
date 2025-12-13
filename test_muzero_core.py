@@ -236,7 +236,7 @@ def test_mcts_expand_node_creates_children():
   node = Node(prior=1.0)
   hidden_state = torch.randn(1, STATE_SIZE)
   action = 1
-  network_output = network.forward(hidden_state, action)
+  network_output = network.recurrent_forward(hidden_state, action)
 
   mcts.expand_node(node, network_output)
 
@@ -257,7 +257,7 @@ def test_mcts_backprop_updates_visits_and_values():
   network_output = NetworkOutput(
     hidden_state=torch.randn(1, STATE_SIZE),
     reward=0.0,
-    policy=[0.5, 0.25, 0.25],
+    policy_logits=[0.5, 0.25, 0.25],
     value=2.0
   )
 

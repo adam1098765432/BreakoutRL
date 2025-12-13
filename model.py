@@ -47,6 +47,7 @@ TODO:
 - Finish the replay buffer class << Justin
 - Add self play (data generation)
 - Complete training loop (how are the gradients stored?)
+- Sample a position from the replay buffer using get_sampling_priority
 """
 
 import numpy as np
@@ -63,6 +64,14 @@ SUPPORT_SIZE = 101 # Categorical reward and value [-50, 50] (see Appendix F of M
 K_STEPS = 5
 DISCOUNT_FACTOR = 0.997
 MAX_MOVES = 50 * 100
+LR_INIT = 0.05
+LR_DECAY_RATE = 0.95
+LR_DECAY_STEPS = 10
+TRAINING_STEPS = 50
+SAVE_EVERY = 10
+UNROLL_STEPS = 5
+TD_STEPS = 5
+WEIGHT_DECAY = 0.0001
 
 class MinMaxStats:
   def __init__(self, min_val=None, max_val=None):
@@ -98,57 +107,6 @@ class Node:
     if self.visit_count == 0:
       return 0
     return self.value_sum / self.visit_count
-
-class Game:
-  pass
-
-class ReplayBuffer:
-  """
-  Stores the trajectories: (prev_state, next_state, action, reward, is_done)
-  """
-  def __init__(self, capacity, batch_size):
-    self.buffer = []
-    self.batch_size = batch_size
-    self.capacity = capacity
-
-  def add_game(self, trajectory):
-    self.buffer.append(trajectory)
-    if len(self.buffer) > self.capacity:
-      self.buffer.pop(0)
-
-  def sample_batch(self, num_unroll_steps: int, td_steps: int):
-      games = [self.sample_game() for _ in range(self.batch_size)]
-      game_pos = [(g, self.sample_position(g)) for g in games]
-      return [(g.make_image(i), g.history[i:i + num_unroll_steps],
-               g.make_target(i, num_unroll_steps, td_steps, g.to_play()))
-              for (g, i) in game_pos]
-
-  def sample_game(self) -> Game:
-    # Sample game from buffer either uniformly or according to some priority.
-    return random.choice(self.buffer)
-
-  def sample_position(self, game) -> int:
-    # Sample position from game either uniformly or according to some priority.
-    T = len(game.history)
-    return random.randint(0, T - 1)
-
-  def get_sampling_priority(mcts_value, target_value):
-    """
-    Based on the MuZero Appendix G<br>
-    This function is for choosing the replay sample from the replay buffer to train with.
-    The higher the difference in mcts_value and target_value, the higher the
-    priority (this corresponds to uncertainty).
-    
-    ### Important!
-    To get a probability, normalize all priorities across all replay samples
-    so that you can correct for sampling bias in the future. This is done by scaling
-    the loss by w_i = (1 / N) * (1 / P(i)), where N is the number of replay samples
-    and P(i) is the priority of the ith replay sample.
-
-    :param mcts_value: The search value for the replay sample
-    :param target_value: The target value from the replay sample
-    """
-    return np.abs(mcts_value - target_value) # Don't forget to normalize to get the probability!
 
 class PredictionModel(nn.Module):
   """
@@ -224,15 +182,21 @@ class DynamicsModel(nn.Module):
     return state, reward
 
 class NetworkOutput:
+  """
+  :param hidden_state: The latent representation of the state
+  :param reward: The reward for the state
+  :param policy_logits: The policy for the state
+  :param value: The value for the state
+  """
   hidden_state: torch.Tensor
   reward: float
-  policy: list[float]
+  policy_logits: torch.Tensor
   value: float
 
-  def __init__(self, hidden_state, reward, policy, value):
+  def __init__(self, hidden_state, reward, policy_logits, value):
     self.hidden_state = hidden_state
     self.reward = reward
-    self.policy = policy
+    self.policy_logits = policy_logits
     self.value = value
 
 class Network:
@@ -242,12 +206,12 @@ class Network:
     self.training_steps = 0
 
   def initial_forward(self, state: torch.Tensor):
+    hidden_state, reward = self.dynamics_model(state, 1)
     value = 0
-    reward = 0
     policy = [1 / ACTION_SIZE] * ACTION_SIZE
-    return NetworkOutput(state, reward, policy, value)
+    return NetworkOutput(hidden_state, reward, policy, value)
 
-  def forward(self, state: torch.Tensor, action: int):
+  def recurrent_forward(self, state: torch.Tensor, action: int):
     action = one_hot_action(action)
 
     hidden_state, reward = self.dynamics_model(state, action)
@@ -255,16 +219,27 @@ class Network:
 
     value = one_hot_score_to_scaler(value[0]).item()
     reward = one_hot_score_to_scaler(reward[0]).item()
-    policy = F.softmax(policy_logits, dim=1)[0].tolist()
 
-    return NetworkOutput(hidden_state, reward, policy, value)
+    return NetworkOutput(hidden_state, reward, policy_logits, value)
+  
+  def forward_grad(self, state: torch.Tensor, action: int):
+    action = one_hot_action(action)
+
+    hidden_state, reward = self.dynamics_model(state, action)
+    policy_logits, value = self.prediction_model(hidden_state)
+
+    return NetworkOutput(hidden_state, reward, policy_logits, value)
+  
+  def parameters(self):
+    return self.dynamics_model.parameters() + self.prediction_model.parameters()
 
 class UniformNetwork(Network):
   def __init__(self):
     super().__init__(None, None)
 
-  def forward(self, state: torch.Tensor, action: int):
-    return NetworkOutput(state, 0, [1 / ACTION_SIZE] * ACTION_SIZE, 0)
+  def recurrent_forward(self, state: torch.Tensor, action: int):
+    policy_logits = torch.ones(1, ACTION_SIZE)
+    return NetworkOutput(state, 0, policy_logits, 0)
 
 class Node:
   """
@@ -328,7 +303,7 @@ class MCTS:
         search_path.append(node)
 
       parent = search_path[-2]
-      network_output = self.network.forward(parent.hidden_state, action)
+      network_output = self.network.recurrent_forward(parent.hidden_state, action)
 
       self.expand_node(node, network_output)
       self.backprop(search_path, network_output, min_max_stats)
@@ -336,9 +311,10 @@ class MCTS:
   def expand_node(self, node: Node, network_output: NetworkOutput):
     node.hidden_state = network_output.hidden_state
     node.reward = network_output.reward
+    priors = torch.softmax(torch.tensor(network_output.policy_logits[0]), dim=0).tolist()
 
     for i in range(ACTION_SIZE):
-      child = Node(network_output.policy[i])
+      child = Node(priors[i])
       node.children[i] = child
 
   def backprop(self, search_path: list[Node], network_output: NetworkOutput, min_max_stats: MinMaxStats):
@@ -409,7 +385,7 @@ def ucb_score(parent: Node, child: Node, min_max_stats: MinMaxStats, c1=1.25, c2
 
 class NetworkBuffer:
   def __init__(self):
-    self.networks = {}
+    self.networks: dict[int, Network] = {}
 
   def latest_network(self):
     if self.networks:
@@ -417,7 +393,7 @@ class NetworkBuffer:
     else:
       return UniformNetwork() # Default
     
-  def save_network(self, step, network):
+  def save_network(self, step: int, network: Network):
     self.networks[step] = network
 
 class Environment:
@@ -426,9 +402,11 @@ class Environment:
     Take a step in the environment
     
     :param action: The action
-    :return: The reward
+    :return: The state and reward
     """
-    return 0
+    state = np.zeros(STATE_SIZE)
+    reward = 0
+    return state, reward
 
   def terminal(self):
     return False
@@ -444,6 +422,7 @@ class Game:
     self.rewards = []
     self.child_visits = []
     self.root_values = []
+    self.states: list[torch.Tensor] = []
     self.action_space_size = action_space_size
     self.discount_factor = discount_factor
 
@@ -454,7 +433,8 @@ class Game:
     return [i for i in range(self.action_space_size)]
   
   def apply(self, action: int):
-    reward = self.environment.step(action)
+    state, reward = self.environment.step(action)
+    self.states.append(state)
     self.rewards.append(reward)
     self.history.append(action)
 
@@ -521,6 +501,61 @@ class Game:
   def get_initial_state(self):
     return torch.zeros(size=(1, STATE_SIZE))
 
+class ReplayBuffer:
+  """
+  Stores the trajectories: (prev_state, next_state, action, reward, is_done)
+  """
+  def __init__(self, capacity, batch_size):
+    self.buffer = []
+    self.batch_size = batch_size
+    self.capacity = capacity
+
+  def add_game(self, game: Game):
+    self.buffer.append(game)
+    if len(self.buffer) > self.capacity:
+      self.buffer.pop(0)
+
+  def sample_batch(self, unroll_steps: int, td_steps: int):
+    """
+    Samples a batch of trajectories from the replay buffer.
+    (current_state, actions, targets)
+    """
+    games = [self.sample_game() for _ in range(self.batch_size)]
+    game_pos = [(g, self.sample_position(g)) for g in games]
+
+    return [(
+      game.states[state_idx],
+      game.history[state_idx:state_idx + unroll_steps],
+      game.get_targets(state_idx, unroll_steps, td_steps)
+    ) for (game, state_idx) in game_pos]
+
+  def sample_game(self) -> Game:
+    # Sample game from buffer either uniformly or according to some priority.
+    return random.choice(self.buffer)
+
+  def sample_position(self, game) -> int:
+    # TODO: sample from get_sampling_priority.
+    T = len(game.history)
+    return random.randint(0, T - 1)
+
+  def get_sampling_priority(mcts_value, target_value):
+    """
+    Based on the MuZero Appendix G<br>
+    This function is for choosing the replay sample from the replay buffer to train with.
+    The higher the difference in mcts_value and target_value, the higher the
+    priority (this corresponds to uncertainty).
+    
+    ### Important!
+    To get a probability, normalize all priorities across all replay samples
+    so that you can correct for sampling bias in the future. This is done by scaling
+    the loss by w_i = (1 / N) * (1 / P(i)), where N is the number of replay samples
+    and P(i) is the priority of the ith replay sample.
+
+    :param mcts_value: The search value for the replay sample
+    :param target_value: The target value from the replay sample
+    """
+    return np.abs(mcts_value - target_value) # Don't forget to normalize to get the probability!
+
 def get_root_node(mcts: MCTS, game: Game):
   root = Node(0)
   current_state = game.get_initial_state()
@@ -547,7 +582,13 @@ def play_game(mcts: MCTS):
 
 """ Training """
 
-def train():
+def scale_gradient(tensor, scale):
+  """
+  Scales the gradient by a factor.
+  """
+  return tensor * scale + tensor.detach() * (1 - scale)
+
+def train(replay_buffer: ReplayBuffer, network_buffer: NetworkBuffer):
   """
   Training loop.
   
@@ -555,4 +596,64 @@ def train():
   Remember to scale the loss by 1 / K_STEPS to ensure the gradient has a similar magnitude
   regardless of the number of unroll steps.
   """
-  pass
+  dynamics_model = DynamicsModel()
+  prediction_model = PredictionModel()
+  network = Network(dynamics_model, prediction_model)
+  optimizer = torch.optim.AdamW(network.parameters(), lr=LR_INIT, weight_decay=WEIGHT_DECAY)
+
+  for i in range(TRAINING_STEPS):
+    if i % SAVE_EVERY == 0:
+      network_buffer.save_network(network)
+    batch = replay_buffer.sample_batch(UNROLL_STEPS, TD_STEPS)
+    update_weights(optimizer, network, batch)
+  
+  network_buffer.save_network(network)
+
+def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple]):
+  learning_rate = LR_INIT * LR_DECAY_RATE ** (network.training_steps / LR_DECAY_STEPS)
+  optimizer.param_groups[0]['lr'] = learning_rate
+  loss = 0
+
+  for game_state, actions, targets in batch:
+    optimizer.zero_grad()
+    
+    # Initial step
+    network_output = network.initial_forward(game_state)
+    predictions = [
+      1.0,
+      network_output.value,
+      network_output.reward,
+      network_output.policy_logits
+    ]
+
+    # Recurrent steps
+    for action in actions:
+      network_output = network.recurrent_forward(network_output, action)
+      predictions += [
+        1 / len(actions),
+        network_output.value,
+        network_output.reward,
+        network_output.policy_logits
+      ]
+      hidden_state = scale_gradient(hidden_state, 0.5)
+
+    # Compute losses
+    for prediction, target in zip(predictions, targets):
+      gradient_scale, value, reward, policy_logits = prediction
+      target_value, target_reward, target_policy = target
+
+      raw_loss = (
+        F.mse_loss(value, target_value) +
+        F.mse_loss(reward, target_reward) +
+        F.cross_entropy(policy_logits, target_policy)
+      )
+
+      loss += scale_gradient(raw_loss, gradient_scale)
+
+  # Backpropagate
+  loss.backward()
+  optimizer.step()
+  network.training_steps += 1
+
+
+    
