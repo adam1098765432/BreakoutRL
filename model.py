@@ -64,7 +64,7 @@ ACTION_SIZE = 3
 SUPPORT_SIZE = 101 # Categorical reward and value [-50, 50] (see Appendix F of MuZero paper)
 K_STEPS = 5
 DISCOUNT_FACTOR = 0.997
-MAX_MOVES = 50 * 100
+MAX_MOVES = 10
 LR_INIT = 0.05
 LR_DECAY_RATE = 0.95
 LR_DECAY_STEPS = 10
@@ -167,8 +167,9 @@ class NetworkOutput:
     self.policy_logits = policy_logits
     self.value = value
 
-class Network:
+class Network(nn.Module):
   def __init__(self, dynamics_model: DynamicsModel, prediction_model: PredictionModel):
+    super().__init__()
     self.dynamics_model = dynamics_model
     self.prediction_model = prediction_model
     self.training_steps = 0
@@ -178,34 +179,51 @@ class Network:
     value = 0
     policy = torch.ones(1, ACTION_SIZE)
     return NetworkOutput(hidden_state, reward, policy, value)
+  
+  def initial_forward_grad(self, state: torch.Tensor):
+    hidden_state, reward = self.dynamics_model(state, one_hot_action(1))
+    value = scalar_to_support(value_transform(0))
+    policy = torch.ones(1, ACTION_SIZE)
+    return NetworkOutput(hidden_state, reward, policy, value)
 
   def recurrent_forward(self, state: torch.Tensor, action: int):
     hidden_state, reward = self.dynamics_model(state, one_hot_action(action))
     policy_logits, value = self.prediction_model(hidden_state)
 
-    value = one_hot_score_to_scaler(value[0]).item()
-    reward = one_hot_score_to_scaler(reward[0]).item()
+    value = inverse_value_transform(support_to_scalar(value))
+    reward = inverse_value_transform(support_to_scalar(reward))
 
     return NetworkOutput(hidden_state, reward, policy_logits, value)
   
-  def forward_grad(self, state: torch.Tensor, action: int):
-    action = one_hot_action(action)
-
+  def recurrent_forward_grad(self, state: torch.Tensor, action: int):
     hidden_state, reward = self.dynamics_model(state, one_hot_action(action))
     policy_logits, value = self.prediction_model(hidden_state)
 
     return NetworkOutput(hidden_state, reward, policy_logits, value)
-  
-  def parameters(self):
-    return self.dynamics_model.parameters() + self.prediction_model.parameters()
 
 class UniformNetwork(Network):
   def __init__(self):
     super().__init__(None, None)
 
+  def initial_forward(self, state):
+    policy_logits = torch.ones(1, ACTION_SIZE)
+    return NetworkOutput(state, 0, policy_logits, 0)
+  
+  def initial_forward_grad(self, state):
+    policy_logits = torch.ones(1, ACTION_SIZE)
+    reward = scalar_to_support(value_transform(0))
+    value = scalar_to_support(value_transform(0))
+    return NetworkOutput(state, reward, policy_logits, value)
+
   def recurrent_forward(self, state: torch.Tensor, action: int):
     policy_logits = torch.ones(1, ACTION_SIZE)
     return NetworkOutput(state, 0, policy_logits, 0)
+  
+  def recurrent_forward_grad(self, state: torch.Tensor, action: int):
+    policy_logits = torch.ones(1, ACTION_SIZE)
+    reward = scalar_to_support(value_transform(0))
+    value = scalar_to_support(value_transform(0))
+    return NetworkOutput(state, reward, policy_logits, value)
 
 """ MCTS """
 
@@ -256,6 +274,13 @@ class MCTS:
     self.n_simulations = 50
 
   def select_action(self, node: Node, num_moves: int) -> int:
+    """
+    Docstring for select_action
+    
+    :param node: The node to select an action from
+    :param num_moves: The number of moves made so far
+    :return: The action to take
+    """
     actions = node.children.keys()
     visit_counts = [child.visit_count for child in node.children.values()]
     temp = get_temperature(num_moves, self.network.training_steps)
@@ -315,7 +340,7 @@ class NetworkBuffer:
     self.networks: dict[int, Network] = {}
 
   def latest_network(self):
-    if self.networks:
+    if len(self.networks) > 0:
       return self.networks[max(self.networks.keys())] # Return the latest network
     else:
       return UniformNetwork() # Default
@@ -331,8 +356,8 @@ class Environment:
     :param action: The action
     :return: The state and reward
     """
-    state = np.zeros(STATE_SIZE)
-    reward = 0
+    state = torch.zeros(size=(1, STATE_SIZE))
+    reward = 0.0
     return state, reward
 
   def terminal(self):
@@ -402,7 +427,7 @@ class Game:
       if boostrap_state_idx < len(self.root_values):
         value = self.root_values[boostrap_state_idx] * self.discount_factor ** td_steps
       else:
-        value = 0
+        value = 0.0
 
       # Now we add the sum of all the individual rewards up to the bootstrap state to the value
       for i, reward in enumerate(self.rewards[current_state_idx:boostrap_state_idx]):
@@ -412,18 +437,24 @@ class Game:
       if current_state_idx > 0 and current_state_idx < len(self.rewards):
         last_reward = self.rewards[current_state_idx - 1]
       else:
-        last_reward = 0
+        last_reward = 0.0
       
-      # The policy is taken from the proportion of visits to each action
-      policy = self.child_visits[current_state_idx]
-
       # Finally, we append the targets
       if current_state_idx < len(self.root_values):
-        targets.append((value, last_reward, policy))
+        # The policy is taken from the proportion of visits to each action
+        policy = self.child_visits[current_state_idx]
+        targets.append((
+          scalar_to_support(value_transform(value)),
+          scalar_to_support(value_transform(last_reward)),
+          torch.tensor(policy).unsqueeze(0)
+        ))
       else:
         # States past the end of games are absorbing states
-        uniform_policy = [1 / self.action_space_size] * self.action_space_size
-        targets.append((0, last_reward, uniform_policy))
+        targets.append((
+          scalar_to_support(value_transform(0.0)),
+          scalar_to_support(value_transform(last_reward)),
+          torch.ones(size=(1, self.action_space_size))
+        ))
 
     return targets
 
@@ -503,7 +534,7 @@ def play_game(mcts: MCTS):
   while not game.terminal() and len(game.history) < MAX_MOVES:
     root = get_root_node(mcts, game)
     mcts.search(root, game.history.copy())
-    action = mcts.select_action(root)
+    action = mcts.select_action(root, len(game.history))
     game.apply(action)
     game.store_search_stats(root)
   
@@ -532,11 +563,11 @@ def train(replay_buffer: ReplayBuffer, network_buffer: NetworkBuffer):
 
   for i in range(TRAINING_STEPS):
     if i % SAVE_EVERY == 0:
-      network_buffer.save_network(network)
+      network_buffer.save_network(i, network)
     batch = replay_buffer.sample_batch(UNROLL_STEPS, TD_STEPS)
     update_weights(optimizer, network, batch)
   
-  network_buffer.save_network(network)
+  network_buffer.save_network(TRAINING_STEPS, network)
 
 def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple]):
   learning_rate = LR_INIT * LR_DECAY_RATE ** (network.training_steps / LR_DECAY_STEPS)
@@ -547,24 +578,24 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple])
     optimizer.zero_grad()
     
     # Initial step
-    network_output = network.initial_forward(game_state)
-    predictions = [
-      1.0,
+    network_output = network.initial_forward_grad(game_state)
+    predictions = [(
+      torch.tensor(1.0).unsqueeze(0),
       network_output.value,
       network_output.reward,
       network_output.policy_logits
-    ]
+    )]
 
     # Recurrent steps
     for action in actions:
-      network_output = network.recurrent_forward(network_output, action)
-      predictions += [
-        1 / len(actions),
+      network_output = network.recurrent_forward_grad(network_output.hidden_state, action)
+      predictions += [(
+        torch.tensor(1 / len(actions)).unsqueeze(0),
         network_output.value,
         network_output.reward,
         network_output.policy_logits
-      ]
-      hidden_state = scale_gradient(hidden_state, 0.5)
+      )]
+      network_output.hidden_state = scale_gradient(network_output.hidden_state, 0.5)
 
     # Compute losses
     for prediction, target in zip(predictions, targets):
@@ -599,18 +630,6 @@ def scale_targets(x, eps=1e-3):
   """
   return np.sign(x) * (np.sqrt(np.abs(x) + 1) - 1 + eps * x)
 
-def one_hot_score(x: float):
-  """
-  One-hot encoding for the reward and value
-  
-  :param x: The target (value or reward)
-  """
-  if x < -(SUPPORT_SIZE // 2) or x > SUPPORT_SIZE // 2:
-    raise ValueError(f"x must be between -{SUPPORT_SIZE // 2} and {SUPPORT_SIZE // 2}")
-  arr = torch.zeros(SUPPORT_SIZE)
-  arr[x + 50] = 1
-  return arr
-
 def one_hot_action(x: int):
   """
   One-hot encoding for the action
@@ -620,9 +639,6 @@ def one_hot_action(x: int):
   arr = torch.zeros(size=(1, ACTION_SIZE))
   arr[0,x] = 1
   return arr
-
-def one_hot_score_to_scaler(x: torch.Tensor):
-  return torch.dot(x, torch.arange(-(SUPPORT_SIZE // 2), SUPPORT_SIZE // 2 + 1, dtype=torch.float32))
 
 def ucb_score(parent: Node, child: Node, min_max_stats: MinMaxStats, c1=1.25, c2=19652):
   """
@@ -640,3 +656,41 @@ def ucb_score(parent: Node, child: Node, min_max_stats: MinMaxStats, c1=1.25, c2
   else:
     value_score = 0
   return prior_score + value_score
+
+def value_transform(x: float, eps=1e-3):
+  return np.sign(x) * (np.sqrt(np.abs(x) + 1) - 1) + eps * x
+
+def inverse_value_transform(x: float, eps=1e-3):
+  return np.sign(x) * (
+    ((np.sqrt(1 + 4 * eps * (np.abs(x) + 1 + eps)) - 1) / (2 * eps))**2 - 1
+  )
+
+def scalar_to_support(x: float, support_size=SUPPORT_SIZE):
+  # x is already transformed
+  x = np.clip(x, -support_size//2, support_size//2)
+
+  floor = np.floor(x)
+  ceil = np.ceil(x)
+
+  prob_upper = x - floor
+  prob_lower = 1.0 - prob_upper
+
+  support = torch.zeros(support_size, device=x.device)
+
+  idx_lower = int(floor + support_size // 2)
+  idx_upper = int(ceil + support_size // 2)
+
+  support[idx_lower] += prob_lower
+  support[idx_upper] += prob_upper
+
+  return support.unsqueeze(0)
+
+def support_to_scalar(probs: torch.Tensor, support_size=SUPPORT_SIZE):
+  support = torch.arange(
+    -(support_size // 2),
+    support_size // 2 + 1,
+    device=probs.device,
+    dtype=torch.float32
+  )
+  return torch.dot(probs[0], support).item()
+

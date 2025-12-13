@@ -3,31 +3,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from model import (
-  Game,
-  MinMaxStats,
-  Network,
-  NetworkOutput,
-  ReplayBuffer,
-  PredictionModel,
-  DynamicsModel,
-  Node,
-  MCTS,
-  get_root_node,
-  scale_targets,
-  one_hot_score,
-  one_hot_action,
-  one_hot_score_to_scaler,
-  ucb_score,
-  STATE_SIZE,
-  ACTION_SIZE,
-  SUPPORT_SIZE,
-  DISCOUNT_FACTOR
-)
+from model import *
 
-# ----------------------------
 # MinMaxStats
-# ----------------------------
 
 def test_minmaxstats_normalization():
   stats = MinMaxStats()
@@ -49,9 +27,7 @@ def test_minmaxstats_no_range_returns_input():
   assert stats.normalize(3) == 3
 
 
-# ----------------------------
 # ReplayBuffer
-# ----------------------------
 
 def test_replay_buffer_capacity():
   buffer = ReplayBuffer(capacity=2, batch_size=2)
@@ -70,9 +46,7 @@ def test_sampling_priority_absolute_difference():
   assert p == 2.0
 
 
-# ----------------------------
 # PredictionModel
-# ----------------------------
 
 def test_prediction_model_output_shapes():
   model = PredictionModel()
@@ -84,9 +58,7 @@ def test_prediction_model_output_shapes():
   assert value_logits.shape == (1, SUPPORT_SIZE)
 
 
-# ----------------------------
 # DynamicsModel
-# ----------------------------
 
 def test_dynamics_model_output_shapes_and_bounds():
   model = DynamicsModel()
@@ -128,9 +100,7 @@ def test_dynamics_same_action_same_state_is_deterministic():
   assert torch.allclose(r1, r2)
 
 
-# ----------------------------
 # Node
-# ----------------------------
 
 def test_node_value_zero_when_unvisited():
   node = Node(prior=0.5)
@@ -145,9 +115,7 @@ def test_node_value_average():
   assert node.value() == 5
 
 
-# ----------------------------
 # One-hot encodings
-# ----------------------------
 
 def test_one_hot_action_valid():
   a = one_hot_action(1)
@@ -156,26 +124,25 @@ def test_one_hot_action_valid():
   assert a[0,1] == 1
 
 
-def test_one_hot_score_center():
-  s = one_hot_score(0)
-  assert s.shape == (SUPPORT_SIZE,)
-  assert s.sum() == 1
-  assert s[SUPPORT_SIZE // 2] == 1
+def test_scalar_to_support():
+  s = scalar_to_support(0)
+  assert s.shape == (1, SUPPORT_SIZE)
 
 
-def test_one_hot_score_out_of_bounds():
-  with pytest.raises(ValueError):
-    one_hot_score(1000)
+def test_scalar_to_support_identity():
+  value = 0
+  support = scalar_to_support(value)
+  value_recovered = support_to_scalar(support)
+  assert abs(value - value_recovered) < 1e-6
 
 
-def test_one_hot_score_to_scalar_identity():
-  x = torch.zeros(SUPPORT_SIZE)
-  x[SUPPORT_SIZE // 2 + 10] = 1  # +10
-  assert one_hot_score_to_scaler(x).item() == 10
+def test_transform_identity():
+  value = 0
+  value_transformed = value_transform(value)
+  value_recovered = inverse_value_transform(value_transformed)
+  assert abs(value - value_recovered) < 1e-6
 
-# ----------------------------
 # Target scaling
-# ----------------------------
 
 def test_scale_targets_sign_preserved():
   x_pos = scale_targets(4.0)
@@ -189,9 +156,7 @@ def test_scale_targets_zero():
   assert scale_targets(0.0) == 0.0
 
 
-# ----------------------------
 # UCB score
-# ----------------------------
 
 def test_ucb_score_increases_with_prior():
   parent = Node(prior=1.0)
@@ -224,9 +189,7 @@ def test_ucb_score_value_influence():
   assert isinstance(score, float)
 
 
-# ----------------------------
 # MCTS
-# ----------------------------
 
 def test_mcts_expand_node_creates_children():
   dyn = DynamicsModel()
@@ -281,3 +244,61 @@ def test_mcts_search_requires_root_hidden_state():
 
   # If hidden_state is missing, this should crash
   mcts.search(root, action_history=[])
+
+# Self-play
+
+def test_self_play_stats():
+  dyn = DynamicsModel()
+  pred = PredictionModel()
+  network = Network(dyn, pred)
+  mcts = MCTS(network)
+  
+  game = play_game(mcts)
+
+  assert len(game.history) <= MAX_MOVES
+  assert len(game.history) == len(game.states)
+  assert len(game.states) == len(game.rewards)
+  assert len(game.rewards) == len(game.child_visits)
+  assert len(game.child_visits) == len(game.root_values)
+
+  for child_visits in game.child_visits:
+    assert abs(sum(child_visits) - 1) < 1e-6
+
+def test_self_play_targets():
+  dyn = DynamicsModel()
+  pred = PredictionModel()
+  network = Network(dyn, pred)
+  mcts = MCTS(network)
+
+  game = play_game(mcts)
+  targets = game.get_targets(0, 5, 5)
+
+  assert type(targets) == list
+  assert len(targets) == 6
+
+  for t in targets:
+    assert type(t) == tuple
+    assert len(t) == 3
+    assert type(t[0]) == torch.Tensor
+    assert t[0].shape == (1, SUPPORT_SIZE)
+    assert type(t[1]) == torch.Tensor
+    assert t[1].shape == (1, SUPPORT_SIZE)
+    assert type(t[2]) == torch.Tensor
+    assert t[2].shape == (1, ACTION_SIZE)
+
+
+# Training
+
+def test_training():
+  dyn = DynamicsModel()
+  pred = PredictionModel()
+  network = Network(dyn, pred)
+  mcts = MCTS(network)
+
+  replay_buffer = ReplayBuffer(5, 1)
+  network_buffer = NetworkBuffer()
+  # network_buffer.save_network(0, network)
+
+  run_selfplay(replay_buffer, network_buffer, 10)
+
+  train(replay_buffer, network_buffer)
