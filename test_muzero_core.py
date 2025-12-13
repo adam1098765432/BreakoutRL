@@ -32,18 +32,23 @@ def test_minmaxstats_no_range_returns_input():
 def test_replay_buffer_capacity():
   buffer = ReplayBuffer(capacity=2, batch_size=2)
 
-  buffer.add_game("t1")
-  buffer.add_game("t2")
-  buffer.add_game("t3")
+  game_1 = Game(ACTION_SIZE, DISCOUNT_FACTOR)
+  game_2 = Game(ACTION_SIZE, DISCOUNT_FACTOR)
+  game_3 = Game(ACTION_SIZE, DISCOUNT_FACTOR)
+
+  buffer.add_game(game_1)
+  buffer.add_game(game_2)
+  buffer.add_game(game_3)
 
   assert len(buffer.buffer) == 2
-  assert buffer.buffer[0] == "t2"
-  assert buffer.buffer[1] == "t3"
+  assert buffer.buffer[0] == game_2
+  assert buffer.buffer[1] == game_3
 
 
 def test_sampling_priority_absolute_difference():
-  p = ReplayBuffer.get_sampling_priority(5.0, 3.0)
-  assert p == 2.0
+  game = Game(ACTION_SIZE, DISCOUNT_FACTOR)
+  p = game.get_sampling_priority(5.0, 3.0)
+  assert abs(p - 2.0) < 1e-6
 
 
 # PredictionModel
@@ -115,7 +120,7 @@ def test_node_value_average():
   assert node.value() == 5
 
 
-# One-hot encodings
+# Encodings
 
 def test_one_hot_action_valid():
   a = one_hot_action(1)
@@ -256,8 +261,8 @@ def test_self_play_stats():
   game = play_game(mcts)
 
   assert len(game.history) <= MAX_MOVES
-  assert len(game.history) == len(game.states)
-  assert len(game.states) == len(game.rewards)
+  assert len(game.history) == len(game.states) - 1
+  assert len(game.states) - 1 == len(game.rewards)
   assert len(game.rewards) == len(game.child_visits)
   assert len(game.child_visits) == len(game.root_values)
 
@@ -302,3 +307,5 @@ def test_training():
   run_selfplay(replay_buffer, network_buffer, 10)
 
   train(replay_buffer, network_buffer)
+
+test_training()

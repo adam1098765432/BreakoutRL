@@ -1,52 +1,48 @@
-class State:
-  def to_tensor
-  def from_tensor
+Terms
+- Policy: The probability of taking an action given a state
+- Value: The predicted winner or final score
+- Immediate Reward: The reward for taking an action
+- Trajectories: A sequence of states and actions
 
-class Action:
-  def to_tensor
-  def from_tensor
+MuZero
+- Learns a latent model of the environment
+- Uses Monte Carlo Tree Search (MCTS)
+- Requires past sequences of observations (frames/states) and actions to be stored
+- Actions are encoded as constant bias planes (additional channels to the latent representation)
+- MCTS predicts the next state using the previous state and action
+  - Only masks valid actions at the root of the search tree
+- MCTS can proceed past a terminal node, and is expected to return the same terminal state
 
-state: [
-  paddle_x,
-  paddle_y,
-  ball_x,
-  ball_y,
-  ball_vx,
-  ball_vy,
-  ...bricks (1 or 0)
-]
+Functions
+- h: Representation function (predicts latent representation for a given state)
+- g: Dynamics function (predicts next state and immediate reward given previous state and action)
+  - r^k: Reward network (predicts immediate reward for a given state and action)
+  - s^k: State network (predicts next state for a given state and action)
+- f: Prediction function
+  - p^k: Policy network (predicts the immediate action probabilities for a given state)
+  - v^k: Value network (predicts the final reward for a given state)
 
-action: [
-  move_left
-  move_right
-  dont_move
-] # use BCELoss
+Loss
+- Loss = MSE(reward) + MSE(value) + CELoss(policy) + L2_Regularization
+- L2_Regularization (weight decay) = theta_f + theta_h + theta_g
 
-def show_state(state):
-  # create renderer
-  # call render(screen, state)
+Replay Buffer
+- Stores trajectories: K * (prev_state, next_state, action, reward, is_done)
 
-def render(screen, state):
-  # display the state in a window
-  # draw on the screen
+Targets
+- Value target: the discounted cumulative rewards over multiple timesteps
+- Policy target: the final action probabilities from the MCTS search tree
+  (normalized visit counts from MCTS at the root)
+- Reward target: the observed immediate reward at each step
 
-def update(state, action, delta_time=1):
-  # paddle
-  if action == 0: # move_left
-    state.paddle_x -= speed * delta_time
-  if action == 1: # move right
-    state.paddle_x += speed * delta_time
+Categorical reward and value
+- Rewards and values are encoded as probability distributions for scores -300 to 300
+- Targets are mapped to this distribution (phi)
 
-  # TODO: ball
-
-  # TODO: bricks
-
-  # TODO: calculate reward (could be None)
-  if brick_destroyed:
-    reward = 1
-  else:
-    reward = 0
-
-  return state, reward
-
-
+TODO:
+- Fix Node and MCTS class to reflect the pseudocode << Emmett
+- Finish the replay buffer class << Justin
+- Add self play (data generation)
+- Complete training loop (how are the gradients stored?)
+- Sample a position from the replay buffer using get_sampling_priority
+- Vectorize targets in get_targets to match output of the network.
