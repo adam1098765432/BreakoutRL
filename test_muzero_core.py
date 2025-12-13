@@ -4,6 +4,7 @@ import torch
 import torch.nn.functional as F
 
 from model import (
+  Game,
   MinMaxStats,
   Network,
   NetworkOutput,
@@ -274,8 +275,9 @@ def test_mcts_search_requires_root_hidden_state():
   pred = PredictionModel()
   network = Network(dyn, pred)
   mcts = MCTS(network)
+  game = Game(action_space_size=ACTION_SIZE, discount_factor=DISCOUNT_FACTOR)
 
-  root = get_root_node(pred)
+  root = get_root_node(mcts, game)
 
   # If hidden_state is missing, this should crash
   mcts.search(root, action_history=[])

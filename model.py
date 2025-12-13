@@ -48,6 +48,7 @@ TODO:
 - Add self play (data generation)
 - Complete training loop (how are the gradients stored?)
 - Sample a position from the replay buffer using get_sampling_priority
+- Vectorize targets in get_targets to match output of the network.
 """
 
 import numpy as np
@@ -206,15 +207,13 @@ class Network:
     self.training_steps = 0
 
   def initial_forward(self, state: torch.Tensor):
-    hidden_state, reward = self.dynamics_model(state, 1)
+    hidden_state, reward = self.dynamics_model(state, one_hot_action(1))
     value = 0
-    policy = [1 / ACTION_SIZE] * ACTION_SIZE
+    policy = torch.ones(1, ACTION_SIZE)
     return NetworkOutput(hidden_state, reward, policy, value)
 
   def recurrent_forward(self, state: torch.Tensor, action: int):
-    action = one_hot_action(action)
-
-    hidden_state, reward = self.dynamics_model(state, action)
+    hidden_state, reward = self.dynamics_model(state, one_hot_action(action))
     policy_logits, value = self.prediction_model(hidden_state)
 
     value = one_hot_score_to_scaler(value[0]).item()
@@ -225,7 +224,7 @@ class Network:
   def forward_grad(self, state: torch.Tensor, action: int):
     action = one_hot_action(action)
 
-    hidden_state, reward = self.dynamics_model(state, action)
+    hidden_state, reward = self.dynamics_model(state, one_hot_action(action))
     policy_logits, value = self.prediction_model(hidden_state)
 
     return NetworkOutput(hidden_state, reward, policy_logits, value)
@@ -311,7 +310,7 @@ class MCTS:
   def expand_node(self, node: Node, network_output: NetworkOutput):
     node.hidden_state = network_output.hidden_state
     node.reward = network_output.reward
-    priors = torch.softmax(torch.tensor(network_output.policy_logits[0]), dim=0).tolist()
+    priors = torch.softmax(network_output.policy_logits, dim=1)[0].tolist()
 
     for i in range(ACTION_SIZE):
       child = Node(priors[i])
@@ -339,7 +338,7 @@ def scale_targets(x, eps=1e-3):
   """
   return np.sign(x) * (np.sqrt(np.abs(x) + 1) - 1 + eps * x)
 
-def one_hot_score(x):
+def one_hot_score(x: float):
   """
   One-hot encoding for the reward and value
   
@@ -351,7 +350,7 @@ def one_hot_score(x):
   arr[x + 50] = 1
   return arr
 
-def one_hot_action(x):
+def one_hot_action(x: int):
   """
   One-hot encoding for the action
 
@@ -460,6 +459,8 @@ class Game:
     The objective of this function is to compute the targets
     (value, reward, policy) for the replay buffer.
     
+    TODO: Vectorize targets to match output of the network.
+
     :param state_idx: The index of the initial state for this trajectory
     :param unroll_steps: The length of the trajectory
     :param td_steps: The number of steps to look ahead
@@ -559,7 +560,7 @@ class ReplayBuffer:
 def get_root_node(mcts: MCTS, game: Game):
   root = Node(0)
   current_state = game.get_initial_state()
-  network_output = mcts.network.initial_forward(current_state, 0)
+  network_output = mcts.network.initial_forward(current_state)
   mcts.expand_node(root, network_output)
   return root
 
