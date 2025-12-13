@@ -86,7 +86,6 @@ class DynamicsModel(nn.Module):
     self.reward = nn.Linear(latent_size, SUPPORT_SIZE)
 
   def forward(self, state, action):
-    state = state * 0.5 # Gradient Scaling
     x = torch.cat([state, action], dim=1)
     x = F.relu(self.first(x))
     x = self.model(x)
@@ -129,7 +128,7 @@ class Network(nn.Module):
     value = inverse_value_transform(support_to_scalar(value))
     reward = inverse_value_transform(support_to_scalar(reward))
 
-    return NetworkOutput(hidden_state, reward, policy_logits, value)
+    return NetworkOutput(hidden_state, 0.0, policy_logits, value)
   
   def initial_forward_grad(self, state: torch.Tensor):
     hidden_state, reward = self.dynamics_model(state, one_hot_action(DEFAULT_ACTION))
@@ -548,12 +547,13 @@ def play_game(mcts: MCTS):
   game = Game(action_space_size=ACTION_SIZE, discount_factor=DISCOUNT_FACTOR)
   game.states.append(game.get_current_state())
 
-  while not game.terminal() and len(game.history) < MAX_MOVES:
-    root = get_root_node(mcts, game)
-    mcts.search(root, game.history.copy())
-    action = mcts.select_action(root, len(game.history))
-    game.apply(action)
-    game.store_search_stats(root)
+  with torch.no_grad():
+    while not game.terminal() and len(game.history) < MAX_MOVES:
+      root = get_root_node(mcts, game)
+      mcts.search(root, game.history.copy())
+      action = mcts.select_action(root, len(game.history))
+      game.apply(action)
+      game.store_search_stats(root)
   
   return game
 
@@ -589,10 +589,11 @@ def train(replay_buffer: ReplayBuffer, network_buffer: NetworkBuffer):
 def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple]):
   learning_rate = LR_INIT * LR_DECAY_RATE ** (network.training_steps / LR_DECAY_STEPS)
   optimizer.param_groups[0]['lr'] = learning_rate
+  optimizer.zero_grad()
   loss = 0
+  n_losses = 0
 
   for game_state, actions, targets, weight in batch:
-    optimizer.zero_grad()
     
     # Initial step
     network_output = network.initial_forward_grad(game_state)
@@ -614,23 +615,26 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple])
       )]
       network_output.hidden_state = scale_gradient(network_output.hidden_state, 0.5)
 
-    # Compute losses
+    # Accumulate predictions and targets
     for prediction, target in zip(predictions, targets):
       gradient_scale, value, reward, policy_logits = prediction
       target_value, target_reward, target_policy = target
 
       raw_loss = (
-        F.mse_loss(value, target_value) +
-        F.mse_loss(reward, target_reward) +
-        F.cross_entropy(policy_logits, target_policy)
+        F.cross_entropy(value, target_value) +
+        F.cross_entropy(reward, target_reward) +
+        F.kl_div(policy_logits, target_policy)
       )
 
       # Weight is to account for sampling bias
       loss += weight * scale_gradient(raw_loss, gradient_scale)
+      n_losses += 1
 
   # Backpropagate
-  loss /= len(batch)
+  n_losses = len(batch) * (1 + UNROLL_STEPS)
+  loss = loss / n_losses
   loss.backward()
+  torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
   optimizer.step()
   network.training_steps += 1
 
