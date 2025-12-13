@@ -379,27 +379,47 @@ class MCTS:
         search_path.append(node)
 
       parent = search_path[-2]
-      hidden_state, reward = self.dynamics_model(parent.hidden_state, action)
+      hidden_state, reward = self.dynamics_model(parent.hidden_state, one_hot_action(action))
       policy_logits, value = self.prediction_model(hidden_state)
+      
+      value = one_hot_score_to_scaler(value[0]).item()
+      reward = one_hot_score_to_scaler(reward[0]).item()
 
       self.expand_node(node, hidden_state, reward, policy_logits)
       self.backprop(search_path, value, DISCOUNT_FACTOR, min_max_stats)
   
-  def expand_node(self, node: Node, hidden_state: torch.Tensor, reward: torch.Tensor, policy_logits: torch.Tensor):
+  def expand_node(self, node: Node, hidden_state: torch.Tensor, reward: float, policy_logits: torch.Tensor):
     node.hidden_state = hidden_state
     node.reward = reward
-    policy = F.softmax(policy_logits)
+    policy = F.softmax(policy_logits, dim=1)
 
     for i in range(ACTION_SIZE):
-      child = Node(policy[i])
+      child = Node(policy[0, i])
       node.children[i] = child
 
-  def backprop(self, search_path: list[Node], value: torch.Tensor, discount: float, min_max_stats: MinMaxStats):
+  def backprop(self, search_path: list[Node], value: float, discount: float, min_max_stats: MinMaxStats):
     for node in reversed(search_path):
       node.value_sum += value # Add negative if it's the opponent's turn
       node.visit_count += 1
       min_max_stats.update(node.value())
       value = node.reward + discount * value
+
+def get_root_node(pred: PredictionModel):
+  root = Node(prior=1.0)
+  root.hidden_state = torch.randn(1, STATE_SIZE) # TODO: Replace with the initial state
+  root.reward = 0
+
+  policy_logits, value = pred(root.hidden_state)
+  policy = F.softmax(policy_logits, dim=1)
+
+  root.value_sum = one_hot_score_to_scaler(value[0]).item()
+  root.visit_count = 1
+
+  for i in range(ACTION_SIZE):
+    child = Node(policy[0, i])
+    root.children[i] = child
+
+  return root
 
 def scale_targets(x, eps=1e-3):
   """
@@ -417,7 +437,7 @@ def one_hot_score(x):
   
   :param x: The target (value or reward)
   """
-  if x < -SUPPORT_SIZE // 2 or x > SUPPORT_SIZE // 2:
+  if x < -(SUPPORT_SIZE // 2) or x > SUPPORT_SIZE // 2:
     raise ValueError(f"x must be between -{SUPPORT_SIZE // 2} and {SUPPORT_SIZE // 2}")
   arr = torch.zeros(SUPPORT_SIZE)
   arr[x + 50] = 1
@@ -429,9 +449,13 @@ def one_hot_action(x):
 
   :param x: The action index
   """
-  arr = torch.zeros(ACTION_SIZE)
-  arr[x] = 1
+  arr = torch.zeros(size=(1, ACTION_SIZE))
+  arr[0,x] = 1
   return arr
+
+def one_hot_score_to_scaler(x: torch.Tensor):
+  print(-(SUPPORT_SIZE // 2), SUPPORT_SIZE // 2 + 1)
+  return torch.dot(x, torch.arange(-(SUPPORT_SIZE // 2), SUPPORT_SIZE // 2 + 1, dtype=torch.float32))
 
 def ucb_score(parent: Node, child: Node, min_max_stats: MinMaxStats, c1=1.25, c2=19652):
   """
