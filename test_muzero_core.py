@@ -53,7 +53,7 @@ def test_minmaxstats_no_range_returns_input():
 # ----------------------------
 
 def test_replay_buffer_capacity():
-  buffer = ReplayBuffer(capacity=2)
+  buffer = ReplayBuffer(capacity=2, batch_size=2)
 
   buffer.add_game("t1")
   buffer.add_game("t2")
