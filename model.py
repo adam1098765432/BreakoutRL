@@ -231,8 +231,8 @@ class ReplayBuffer:
     self.batch_size = batch_size
     self.capacity = capacity
 
-  def save_games(self, game):
-    self.buffer.append(game)
+  def add_trajectory(self, trajectory):
+    self.buffer.append(trajectory)
     if len(self.buffer) > self.capacity:
       self.buffer.pop(0)
 
