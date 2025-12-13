@@ -57,7 +57,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import random
 
-
+# Training parameters
 MAX_FLOAT = float('inf')
 STATE_SIZE = 10
 ACTION_SIZE = 3
@@ -74,40 +74,7 @@ UNROLL_STEPS = 5
 TD_STEPS = 5
 WEIGHT_DECAY = 0.0001
 
-class MinMaxStats:
-  def __init__(self, min_val=None, max_val=None):
-    self.max = max_val if max_val is not None else -MAX_FLOAT
-    self.min = min_val if min_val is not None else MAX_FLOAT
-
-  def update(self, val):
-    self.max = max(self.max, val)
-    self.min = min(self.min, val)
-
-  def normalize(self, val):
-    if self.max > self.min:
-      return (val - self.min) / (self.max - self.min)
-    return val
-
-class Node:
-  """
-  Node in the MCTS search tree.
-  """
-  def __init__(self, prior: float):
-    self.visit_count = 0
-    self.to_play = -1
-    self.prior = prior
-    self.value_sum = 0
-    self.children = {}
-    self.hidden_state = None
-    self.reward = 0
-
-  def expanded(self) -> bool:
-    return len(self.children) > 0
-
-  def value(self) -> float:
-    if self.visit_count == 0:
-      return 0
-    return self.value_sum / self.visit_count
+""" Network """
 
 class PredictionModel(nn.Module):
   """
@@ -240,6 +207,22 @@ class UniformNetwork(Network):
     policy_logits = torch.ones(1, ACTION_SIZE)
     return NetworkOutput(state, 0, policy_logits, 0)
 
+""" MCTS """
+
+class MinMaxStats:
+  def __init__(self, min_val=None, max_val=None):
+    self.max = max_val if max_val is not None else -MAX_FLOAT
+    self.min = min_val if min_val is not None else MAX_FLOAT
+
+  def update(self, val):
+    self.max = max(self.max, val)
+    self.min = min(self.min, val)
+
+  def normalize(self, val):
+    if self.max > self.min:
+      return (val - self.min) / (self.max - self.min)
+    return val
+
 class Node:
   """
   Node in the MCTS search tree.
@@ -324,61 +307,6 @@ class MCTS:
       node.visit_count += 1
       min_max_stats.update(node.value())
       value = node.reward + DISCOUNT_FACTOR * value
-
-def get_temperature(num_moves, training_steps):
-  return 1
-
-def scale_targets(x, eps=1e-3):
-  """
-  MuZero Appendix F: Network Architecture says for a value and reward prediction
-  we scale the targets before we obtain the categorical representations.
-
-  :param x: The target (value or reward)
-  :param eps: Epsilon
-  """
-  return np.sign(x) * (np.sqrt(np.abs(x) + 1) - 1 + eps * x)
-
-def one_hot_score(x: float):
-  """
-  One-hot encoding for the reward and value
-  
-  :param x: The target (value or reward)
-  """
-  if x < -(SUPPORT_SIZE // 2) or x > SUPPORT_SIZE // 2:
-    raise ValueError(f"x must be between -{SUPPORT_SIZE // 2} and {SUPPORT_SIZE // 2}")
-  arr = torch.zeros(SUPPORT_SIZE)
-  arr[x + 50] = 1
-  return arr
-
-def one_hot_action(x: int):
-  """
-  One-hot encoding for the action
-
-  :param x: The action index
-  """
-  arr = torch.zeros(size=(1, ACTION_SIZE))
-  arr[0,x] = 1
-  return arr
-
-def one_hot_score_to_scaler(x: torch.Tensor):
-  return torch.dot(x, torch.arange(-(SUPPORT_SIZE // 2), SUPPORT_SIZE // 2 + 1, dtype=torch.float32))
-
-def ucb_score(parent: Node, child: Node, min_max_stats: MinMaxStats, c1=1.25, c2=19652):
-  """
-  :param parent: The parent node
-  :param child: The child node
-  :param c1: The exploration weight.
-  :param c2: The exploration decay.
-  """
-  discount = DISCOUNT_FACTOR
-  prior_weight = np.sqrt(parent.visit_count) / (1 + child.visit_count)
-  prior_weight *= (c1 + np.log((parent.visit_count + c2 + 1) / c2))
-  prior_score = child.prior * prior_weight
-  if child.visit_count > 0:
-    value_score = child.reward + discount * min_max_stats.normalize(child.value())
-  else:
-    value_score = 0
-  return prior_score + value_score
 
 """ Self-play """
 
@@ -656,5 +584,59 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple])
   optimizer.step()
   network.training_steps += 1
 
+""" Utility Functions """
 
-    
+def get_temperature(num_moves, training_steps):
+  return 1
+
+def scale_targets(x, eps=1e-3):
+  """
+  MuZero Appendix F: Network Architecture says for a value and reward prediction
+  we scale the targets before we obtain the categorical representations.
+
+  :param x: The target (value or reward)
+  :param eps: Epsilon
+  """
+  return np.sign(x) * (np.sqrt(np.abs(x) + 1) - 1 + eps * x)
+
+def one_hot_score(x: float):
+  """
+  One-hot encoding for the reward and value
+  
+  :param x: The target (value or reward)
+  """
+  if x < -(SUPPORT_SIZE // 2) or x > SUPPORT_SIZE // 2:
+    raise ValueError(f"x must be between -{SUPPORT_SIZE // 2} and {SUPPORT_SIZE // 2}")
+  arr = torch.zeros(SUPPORT_SIZE)
+  arr[x + 50] = 1
+  return arr
+
+def one_hot_action(x: int):
+  """
+  One-hot encoding for the action
+
+  :param x: The action index
+  """
+  arr = torch.zeros(size=(1, ACTION_SIZE))
+  arr[0,x] = 1
+  return arr
+
+def one_hot_score_to_scaler(x: torch.Tensor):
+  return torch.dot(x, torch.arange(-(SUPPORT_SIZE // 2), SUPPORT_SIZE // 2 + 1, dtype=torch.float32))
+
+def ucb_score(parent: Node, child: Node, min_max_stats: MinMaxStats, c1=1.25, c2=19652):
+  """
+  :param parent: The parent node
+  :param child: The child node
+  :param c1: The exploration weight.
+  :param c2: The exploration decay.
+  """
+  discount = DISCOUNT_FACTOR
+  prior_weight = np.sqrt(parent.visit_count) / (1 + child.visit_count)
+  prior_weight *= (c1 + np.log((parent.visit_count + c2 + 1) / c2))
+  prior_score = child.prior * prior_weight
+  if child.visit_count > 0:
+    value_score = child.reward + discount * min_max_stats.normalize(child.value())
+  else:
+    value_score = 0
+  return prior_score + value_score
