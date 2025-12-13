@@ -41,61 +41,39 @@ Categorical reward and value
 - Targets are mapped to this distribution (phi)
 """
 
+"""
+TODO:
+- Fix Node and MCTS class to reflect the pseudocode << Emmett
+- Finish the replay buffer class << Justin
+- Add self play (data generation)
+- Complete training loop (how are the gradients stored?)
+"""
+
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+MAX_FLOAT = float('inf')
 STATE_SIZE = 10
 ACTION_SIZE = 3
 SUPPORT_SIZE = 101 # Categorical reward and value [-50, 50] (see Appendix F of MuZero paper)
 K_STEPS = 5
+DISCOUNT_FACTOR = 0.997
 
-def upper_confidence_bound(mcts_value, policy_score, parent_visits, child_visits, c1=1.25, c2=19652):
-  """
-  The mcts_value should be normalized across all actions [0, 1].
-  
-  :param mcts_value: The propogated score from MCTS.
-  :param total_mcts_value: The propogated scores for all actions from the parent node.
-  :param policy_score: The score of the action predicted by the policy.
-  :param parent_visits: The number of times the parent node has been visited.
-  :param child_visits: The number of times the child node has been visited.
-  :param c1: The exploration weight.
-  :param c2: The exploration decay.
-  """
-  return mcts_value + policy_score * np.sqrt(parent_visits) / (1 + child_visits) * (c1 + np.log((parent_visits + c2 + 1) / c2))
+class MinMaxStats:
+  def __init__(self, min_val=None, max_val=None):
+    self.max = max_val if max_val is not None else -MAX_FLOAT
+    self.min = min_val if min_val is not None else MAX_FLOAT
 
-def scale_targets(x, eps=1e-3):
-  """
-  MuZero Appendix F: Network Architecture says for a value and reward prediction
-  we scale the targets before we obtain the categorical representations.
+  def update(self, val):
+    self.max = max(self.max, val)
+    self.min = min(self.min, val)
 
-  :param x: The target (value or reward)
-  :param eps: Epsilon
-  """
-  return np.sign(x) * (np.sqrt(np.abs(x) + 1) - 1 + eps * x)
-
-def one_hot_score(x):
-  """
-  One-hot encoding for the reward and value
-  
-  :param x: The target (value or reward)
-  """
-  if x < -SUPPORT_SIZE // 2 or x > SUPPORT_SIZE // 2:
-    raise ValueError(f"x must be between -{SUPPORT_SIZE // 2} and {SUPPORT_SIZE // 2}")
-  arr = torch.zeros(SUPPORT_SIZE)
-  arr[x + 50] = 1
-  return arr
-
-def one_hot_action(x):
-  """
-  One-hot encoding for the action
-
-  :param x: The action index
-  """
-  arr = torch.zeros(ACTION_SIZE)
-  arr[x] = 1
-  return arr
+  def normalize(self, val):
+    if self.max > self.min:
+      return (val - self.min) / (self.max - self.min)
+    return val
 
 class ReplayBuffer:
   """
@@ -208,124 +186,128 @@ class Node:
   """
   Node in the MCTS search tree.
   """
-  largest_Q = []
-
-  def __init__(self, state, action, parent=None):
-    self.state = state
-    self.parent = parent
-    self.visits = 0
-    self.G_k = 0
-    self.children = []
-    self.action = action
+  def __init__(self, prior: float):
+    self.visit_count = 0
+    self.to_play = -1
+    self.prior = prior
+    self.value_sum = 0
+    self.children = {}
+    self.hidden_state = None
     self.reward = 0
-    self.mcts_value = 0
-    self.policy_score = 0
 
-  def backprop(self, child):
-    """
-    Based on the MuZero Appendix B
-      G_k = sum from rho=0 to l-1-k of gamma^rho * r_{k+1+rho} + gamma^(l-k) * v^l
-      For k=l...0, we form an l-k step estimate of the cumulative discounted reward
-    
-    Convert to recurrence relation:
-      G_k = r_{k+1} + gamma * G_{k+1}
-    
-    mcts_value recurrence relation:
-      Q_k = (N_k * Q_k + G_k) / (N_k + 1)
-    
-    visits recurrence relation:
-      N_k = N_k + 1
-    
-    Legend:
-      gamma = discount factor
-      G = cumulative discounted reward
-      r = reward
-      N = number of visits
-      Q = mcts_value
-      l = leaf node
-      k = parent node (this node)
-      k+1 = child node (argument)
-    """
-    gamma = 0.95 # Discount factor
-    r_kp1 = child.reward # Immediate reward
-    G_kp1 = child.G_k # Cumulative discounted reward
+  def expanded(self) -> bool:
+    return len(self.children) > 0
 
-    # Update formulas denoted in MuZero Appendix B
-    self.G_k = r_kp1 + gamma * G_kp1
-    self.mcts_value = (self.visits * self.mcts_value + self.G_k) / (self.visits + 1)
-    self.visits += 1
+  def value(self) -> float:
+    if self.visit_count == 0:
+      return 0
+    return self.value_sum / self.visit_count
 
 class MCTS:
   """
   The MCTS search tree for the MuZero model.
   ### Note:
-  There is no rollout since a value estimate is used instead.
+  There is no rollout since a value estimate is used instead.<br>
+  The Dynamics and Prediction models are only used **once** per simulation.
   """
-  def __init__(self, dynamics_model, prediction_model):
+  def __init__(self, dynamics_model: DynamicsModel, prediction_model: PredictionModel):
     self.dynamics_model = dynamics_model
     self.prediction_model = prediction_model
+    self.n_simulations = 50
 
-  def search(self, root):
-    """
-    ### Selection
-    Select the action with the highest upper confidence bound.
-    Repeat until a leaf node (s^l, a^l) is reached.
-    """
-    node = root
-    action_idx = None
+  def select_child(self, node: Node, min_max_stats: MinMaxStats):
+    _, action, child = max((
+      ucb_score(node, child, min_max_stats),
+      action,
+      child
+    ) for action, child in node.children.items())
 
-    while node.children != []:
-      best_ucb = -float('inf')
-      best_child = None
-      
-      for idx, child in enumerate(node.children):
-        mcts_value = child.mcts_value
-        policy_score = child.policy_score[idx]
-        parent_visits = node.visits
-        child_visits = child.visits
-        child_ucb = upper_confidence_bound(mcts_value, policy_score, parent_visits, child_visits)
-        
-        if child_ucb > best_ucb:
-          best_ucb = child_ucb
-          best_child = child
-          action_idx = idx
+    return action, child
 
-      node = best_child
+  def search(self, root: Node, action_history: list[int]):
+    min_max_stats = MinMaxStats()
 
-    self.expand(node, one_hot_action(action_idx))
+    for _ in range(self.n_simulations):
+      history = action_history.copy()
+      node = root
+      search_path = [node]
 
-  def expand(self, child, action):
-    """
-    ### Expansion
-    Reward and state are computed by the dynamics function and stored in tables.
-    In this case, they are stored in the child node.
-    Policy and value are computed by the prediction function.
-    A new node (s^l, a^l) is added to the search tree.
-    Each edge is initialized to N=0, Q=0, P=p^l.
+      while node.expanded():
+        action, node = self.select_child(node, min_max_stats)
+        history.append(action)
+        search_path.append(node)
 
-    :param child: The node to expand
-    :param action: The action that led to the child node
-    """
-    # Expand child node
-    for _ in range(ACTION_SIZE):
-      child_child = Node(None, None, child)
-      child.children.append(child_child)
+      parent = search_path[-2]
+      hidden_state, reward = self.dynamics_model(parent.hidden_state, action)
+      policy_logits, value = self.prediction_model(hidden_state)
 
-    # Compute statistics for child
-    state, reward = self.dynamics_model(child.parent.state, action)
-    policy, value = self.prediction_model(state)
-    child.state = state
-    child.action = action
-    child.policy_score = F.softmax(policy)
-    child.reward = reward
-    child.mcts_value = value
-    child.G_k = value
+      self.expand_node(node, hidden_state, reward, policy_logits)
+      self.backprop(search_path, value, DISCOUNT_FACTOR, min_max_stats)
+  
+  def expand_node(self, node: Node, hidden_state: torch.Tensor, reward: torch.Tensor, policy_logits: torch.Tensor):
+    node.hidden_state = hidden_state
+    node.reward = reward
+    policy = F.softmax(policy_logits)
 
-    # Backup
-    node = child
-    while node.parent is not None:
-      node.parent.backprop(node)
-      node = node.parent
+    for i in range(ACTION_SIZE):
+      child = Node(policy[i])
+      node.children[i] = child
+
+  def backprop(self, search_path: list[Node], value: torch.Tensor, discount: float, min_max_stats: MinMaxStats):
+    for node in reversed(search_path):
+      node.value_sum += value # Add negative if it's the opponent's turn
+      node.visit_count += 1
+      min_max_stats.update(node.value())
+      value = node.reward + discount * value
+
+def scale_targets(x, eps=1e-3):
+  """
+  MuZero Appendix F: Network Architecture says for a value and reward prediction
+  we scale the targets before we obtain the categorical representations.
+
+  :param x: The target (value or reward)
+  :param eps: Epsilon
+  """
+  return np.sign(x) * (np.sqrt(np.abs(x) + 1) - 1 + eps * x)
+
+def one_hot_score(x):
+  """
+  One-hot encoding for the reward and value
+  
+  :param x: The target (value or reward)
+  """
+  if x < -SUPPORT_SIZE // 2 or x > SUPPORT_SIZE // 2:
+    raise ValueError(f"x must be between -{SUPPORT_SIZE // 2} and {SUPPORT_SIZE // 2}")
+  arr = torch.zeros(SUPPORT_SIZE)
+  arr[x + 50] = 1
+  return arr
+
+def one_hot_action(x):
+  """
+  One-hot encoding for the action
+
+  :param x: The action index
+  """
+  arr = torch.zeros(ACTION_SIZE)
+  arr[x] = 1
+  return arr
+
+def ucb_score(parent: Node, child: Node, min_max_stats: MinMaxStats, c1=1.25, c2=19652):
+  """
+  :param parent: The parent node
+  :param child: The child node
+  :param c1: The exploration weight.
+  :param c2: The exploration decay.
+  """
+  discount = DISCOUNT_FACTOR
+  prior_weight = np.sqrt(parent.visit_count) / (1 + child.visit_count)
+  prior_weight *= (c1 + np.log((parent.visit_count + c2 + 1) / c2))
+  prior_score = child.prior * prior_weight
+  if child.visit_count > 0:
+    value_score = child.reward + discount * min_max_stats.normalize(child.value())
+  else:
+    value_score = 0
+  return prior_score + value_score
 
 def train():
   """
