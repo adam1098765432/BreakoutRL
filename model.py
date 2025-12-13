@@ -223,6 +223,63 @@ class DynamicsModel(nn.Module):
     state = (state - state_mins) / (state_maxs - state_mins + 1e-6)
     return state, reward
 
+class NetworkOutput:
+  hidden_state: torch.Tensor
+  reward: float
+  policy: list[float]
+  value: float
+
+  def __init__(self, hidden_state, reward, policy, value):
+    self.hidden_state = hidden_state
+    self.reward = reward
+    self.policy = policy
+    self.value = value
+
+class Network:
+  def __init__(self, dynamics_model: DynamicsModel, prediction_model: PredictionModel):
+    self.dynamics_model = dynamics_model
+    self.prediction_model = prediction_model
+
+  def forward(self, state: torch.Tensor, action: int):
+    action = one_hot_action(action)
+
+    hidden_state, reward = self.dynamics_model(state, action)
+    policy_logits, value = self.prediction_model(hidden_state)
+
+    value = one_hot_score_to_scaler(value[0]).item()
+    reward = one_hot_score_to_scaler(reward[0]).item()
+    policy = F.softmax(policy_logits, dim=1)[0].tolist()
+
+    return NetworkOutput(hidden_state, reward, policy, value)
+
+class UniformNetwork(Network):
+  def __init__(self):
+    super().__init__(None, None)
+
+  def forward(self, state: torch.Tensor, action: int):
+    return NetworkOutput(state, 0, [1 / ACTION_SIZE] * ACTION_SIZE, 0)
+
+class Node:
+  """
+  Node in the MCTS search tree.
+  """
+  def __init__(self, prior: float):
+    self.visit_count = 0
+    self.to_play = -1
+    self.prior = prior
+    self.value_sum = 0
+    self.children = {}
+    self.hidden_state = None
+    self.reward = 0
+
+  def expanded(self) -> bool:
+    return len(self.children) > 0
+
+  def value(self) -> float:
+    if self.visit_count == 0:
+      return 0
+    return self.value_sum / self.visit_count
+
 class MCTS:
   """
   The MCTS search tree for the MuZero model.
@@ -230,9 +287,8 @@ class MCTS:
   There is no rollout since a value estimate is used instead.<br>
   The Dynamics and Prediction models are only used **once** per simulation.
   """
-  def __init__(self, dynamics_model: DynamicsModel, prediction_model: PredictionModel):
-    self.dynamics_model = dynamics_model
-    self.prediction_model = prediction_model
+  def __init__(self, network: Network):
+    self.network = network
     self.n_simulations = 50
 
   def select_child(self, node: Node, min_max_stats: MinMaxStats):
@@ -258,30 +314,27 @@ class MCTS:
         search_path.append(node)
 
       parent = search_path[-2]
-      hidden_state, reward = self.dynamics_model(parent.hidden_state, one_hot_action(action))
-      policy_logits, value = self.prediction_model(hidden_state)
-      
-      value = one_hot_score_to_scaler(value[0]).item()
-      reward = one_hot_score_to_scaler(reward[0]).item()
+      network_output = self.network.forward(parent.hidden_state, action)
 
-      self.expand_node(node, hidden_state, reward, policy_logits)
-      self.backprop(search_path, value, DISCOUNT_FACTOR, min_max_stats)
+      self.expand_node(node, network_output)
+      self.backprop(search_path, network_output, min_max_stats)
   
-  def expand_node(self, node: Node, hidden_state: torch.Tensor, reward: float, policy_logits: torch.Tensor):
-    node.hidden_state = hidden_state
-    node.reward = reward
-    policy = F.softmax(policy_logits, dim=1)
+  def expand_node(self, node: Node, network_output: NetworkOutput):
+    node.hidden_state = network_output.hidden_state
+    node.reward = network_output.reward
 
     for i in range(ACTION_SIZE):
-      child = Node(policy[0, i])
+      child = Node(network_output.policy[i])
       node.children[i] = child
 
-  def backprop(self, search_path: list[Node], value: float, discount: float, min_max_stats: MinMaxStats):
+  def backprop(self, search_path: list[Node], network_output: NetworkOutput, min_max_stats: MinMaxStats):
+    value = network_output.value
+
     for node in reversed(search_path):
-      node.value_sum += value # Add negative if it's the opponent's turn
+      node.value_sum += value # Add negative if it's the opponent's turn (this is a single player game)
       node.visit_count += 1
       min_max_stats.update(node.value())
-      value = node.reward + discount * value
+      value = node.reward + DISCOUNT_FACTOR * value
 
 def get_root_node(pred: PredictionModel):
   root = Node(prior=1.0)
@@ -289,13 +342,13 @@ def get_root_node(pred: PredictionModel):
   root.reward = 0
 
   policy_logits, value = pred(root.hidden_state)
-  policy = F.softmax(policy_logits, dim=1)
+  policy = F.softmax(policy_logits, dim=1)[0].tolist()
 
   root.value_sum = one_hot_score_to_scaler(value[0]).item()
   root.visit_count = 1
 
   for i in range(ACTION_SIZE):
-    child = Node(policy[0, i])
+    child = Node(policy[i])
     root.children[i] = child
 
   return root
@@ -333,7 +386,6 @@ def one_hot_action(x):
   return arr
 
 def one_hot_score_to_scaler(x: torch.Tensor):
-  print(-(SUPPORT_SIZE // 2), SUPPORT_SIZE // 2 + 1)
   return torch.dot(x, torch.arange(-(SUPPORT_SIZE // 2), SUPPORT_SIZE // 2 + 1, dtype=torch.float32))
 
 def ucb_score(parent: Node, child: Node, min_max_stats: MinMaxStats, c1=1.25, c2=19652):
@@ -352,6 +404,61 @@ def ucb_score(parent: Node, child: Node, min_max_stats: MinMaxStats, c1=1.25, c2
   else:
     value_score = 0
   return prior_score + value_score
+
+""" Self-play """
+
+class Environment:
+  pass
+
+class Game:
+  def __init__(self, action_space_size: int, discount_factor: float):
+    self.environment = Environment()
+    self.history = []
+    self.rewards = []
+    self.child_visits = []
+    self.root_values = []
+    self.action_space_size = action_space_size
+    self.discount_factor = discount_factor
+
+  def terminal(self):
+    return False
+  
+  def legal_actions(self):
+    return [i for i in range(self.action_space_size)]
+  
+  def apply(self, action: int):
+    pass
+
+  def store_search_stats(self, root: Node):
+    """
+    Store the proportion of visits to each child and the mean value of the root
+    
+    :param root: The root node
+    """
+    sum_visits = sum(child.visit_count for child in root.children.values())
+    self.child_visits.append([
+      root.children[i].visit_count / sum_visits if i in root.children else 0
+      for i in range(self.action_space_size)
+    ])
+    self.root_values.append(root.value())
+
+def play_game(network: Network):
+  pass
+
+""" Training """
+
+class NetworkBuffer:
+  def __init__(self):
+    self.networks = {}
+
+  def latest_network(self):
+    if self.networks:
+      return self.networks[max(self.networks.keys())] # Return the latest network
+    else:
+      return UniformNetwork() # Default
+    
+  def save_network(self, step, network):
+    self.networks[step] = network
 
 def train():
   """
