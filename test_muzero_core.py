@@ -1,9 +1,12 @@
 import pytest
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from model import (
   MinMaxStats,
+  Network,
+  NetworkOutput,
   ReplayBuffer,
   PredictionModel,
   DynamicsModel,
@@ -227,14 +230,15 @@ def test_ucb_score_value_influence():
 def test_mcts_expand_node_creates_children():
   dyn = DynamicsModel()
   pred = PredictionModel()
-  mcts = MCTS(dyn, pred)
+  network = Network(dyn, pred)
+  mcts = MCTS(network)
 
   node = Node(prior=1.0)
   hidden_state = torch.randn(1, STATE_SIZE)
-  reward = torch.randn(1, SUPPORT_SIZE)
-  policy_logits = torch.randn(1, ACTION_SIZE)
+  action = 1
+  network_output = network.forward(hidden_state, action)
 
-  mcts.expand_node(node, hidden_state, reward, policy_logits)
+  mcts.expand_node(node, network_output)
 
   assert len(node.children) == ACTION_SIZE
   for a, child in node.children.items():
@@ -248,21 +252,28 @@ def test_mcts_backprop_updates_visits_and_values():
   node2.reward = torch.tensor(1.0)
 
   path = [node1, node2]
-  value = torch.tensor(2.0)
   stats = MinMaxStats()
 
-  mcts = MCTS(None, None)
-  mcts.backprop(path, value, DISCOUNT_FACTOR, stats)
+  network_output = NetworkOutput(
+    hidden_state=torch.randn(1, STATE_SIZE),
+    reward=0.0,
+    policy=[0.5, 0.25, 0.25],
+    value=2.0
+  )
+
+  mcts = MCTS(None)
+  mcts.backprop(path, network_output, stats)
 
   assert node1.visit_count == 1
   assert node2.visit_count == 1
-  assert node2.value_sum == value
+  assert node2.value_sum == 2.0
 
 
 def test_mcts_search_requires_root_hidden_state():
   dyn = DynamicsModel()
   pred = PredictionModel()
-  mcts = MCTS(dyn, pred)
+  network = Network(dyn, pred)
+  mcts = MCTS(network)
 
   root = get_root_node(pred)
 
