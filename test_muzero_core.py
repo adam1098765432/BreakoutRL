@@ -52,9 +52,9 @@ def test_minmaxstats_no_range_returns_input():
 def test_replay_buffer_capacity():
   buffer = ReplayBuffer(capacity=2)
 
-  buffer.add_trajectory("t1")
-  buffer.add_trajectory("t2")
-  buffer.add_trajectory("t3")
+  buffer.add_game("t1")
+  buffer.add_game("t2")
+  buffer.add_game("t3")
 
   assert len(buffer.buffer) == 2
   assert buffer.buffer[0] == "t2"
