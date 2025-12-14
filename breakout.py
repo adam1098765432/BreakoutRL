@@ -46,7 +46,7 @@ class Breakout(Environment):
 
     # Initialize state
     self.state[0, IDX.PADDLE_X] = 0.5
-    self.state[0, IDX.BALL_X] = 0.1
+    self.state[0, IDX.BALL_X] = 0.2
     self.state[0, IDX.BALL_Y] = 0.5
     self.state[0, IDX.BALL_VX] = BALL_SPEED
     self.state[0, IDX.BALL_VY] = BALL_SPEED
@@ -69,7 +69,7 @@ class Breakout(Environment):
 
   def step(self, action: int):
     state = self.state
-    reward = 0
+    reward = 0.001
 
     # Move paddle
     if action == 0:
@@ -95,7 +95,7 @@ class Breakout(Environment):
       state[0, IDX.BALL_Y] = 1 - BALL_RADIUS
       state[0, IDX.BALL_VY] = -state[0, IDX.BALL_VY]
       ball_to_paddle = abs(state[0, IDX.BALL_Y].item() - PADDLE_Y)
-      reward -= 10 * ball_to_paddle
+      reward -= 1 * ball_to_paddle
       self.is_done = True
 
     # Constrain ball horizontally
@@ -132,27 +132,29 @@ class Breakout(Environment):
     brick_br = self.pos_to_brick_idx(ball_right, ball_bottom)
 
     if brick_tl is not None and state[0, IDX.BRICK_BEGIN + brick_tl] == 1:
-      reward += 1.0
+      reward += 0.1
       state[0, IDX.BRICK_BEGIN + brick_tl] = 0
       state[0, IDX.BALL_VY] = -state[0, IDX.BALL_VY]
 
     if brick_tr is not None and state[0, IDX.BRICK_BEGIN + brick_tr] == 1:
-      reward += 1.0
+      reward += 0.1
       state[0, IDX.BRICK_BEGIN + brick_tr] = 0
       state[0, IDX.BALL_VY] = -state[0, IDX.BALL_VY]
 
     if brick_bl is not None and state[0, IDX.BRICK_BEGIN + brick_bl] == 1:
-      reward += 1.0
+      reward += 0.1
       state[0, IDX.BRICK_BEGIN + brick_bl] = 0
       state[0, IDX.BALL_VY] = -state[0, IDX.BALL_VY]
 
     if brick_br is not None and state[0, IDX.BRICK_BEGIN + brick_br] == 1:
-      reward += 1.0
+      reward += 0.1
       state[0, IDX.BRICK_BEGIN + brick_br] = 0
       state[0, IDX.BALL_VY] = -state[0, IDX.BALL_VY]
 
+    reward = np.clip(reward, -1, 1)
+
     return state, reward
-  
+
 def render(state: torch.Tensor, screen: pygame.Surface, screen_width, screen_height):
   brick_width = screen_width // BRICK_COLUMNS
   brick_height = screen_height * (BRICK_BOTTOM - BRICK_TOP) // BRICK_ROWS

@@ -9,6 +9,7 @@ import torch.nn.functional as F
 import random
 
 # Training parameters
+NETWORK_PATH = "Models/network.pt"
 MAX_FLOAT = float('inf')
 STATE_SIZE = 76
 ACTION_SIZE = 3
@@ -28,7 +29,8 @@ TD_STEPS = 10 # Bootstrap 10 steps into the future (see MuZero Appendix G)
 WEIGHT_DECAY = 0.0001 # Taken from psudo code
 BATCH_SIZE = 128
 NUM_ACTORS = 4
-NETWORK_PATH = "Models/network.pt"
+DIRICHLET_ALPHA = 0.25
+DIRICHLET_FRAC = 0.25
 
 """ Threading """
 
@@ -112,12 +114,15 @@ class ResBlock(nn.Module):
     self.alpha = alpha
     self.fc1 = nn.Linear(channels, channels)
     self.fc2 = nn.Linear(channels, channels)
+    self.norm = nn.LayerNorm(channels)
 
   def forward(self, x):
     identity = x
     x = F.relu(self.fc1(x))
     x = F.relu(self.fc2(x))
-    return identity + x * self.alpha
+    x = identity + x * self.alpha
+    x = self.norm(x)
+    return x
 
 class DynamicsModel(nn.Module):
   """
@@ -150,12 +155,6 @@ class DynamicsModel(nn.Module):
     x = self.model(x)
     state = F.relu(self.state(x))
     reward = self.reward(x)
-
-    # Normalize state
-    state_mins = state.min(dim=1, keepdim=True)[0]
-    state_maxs = state.max(dim=1, keepdim=True)[0]
-    state = (state - state_mins) / (state_maxs - state_mins + 1e-6)
-    
     return state, reward
 
 class NetworkOutput:
@@ -371,6 +370,12 @@ class MCTS:
       min_max_stats.update(node.value())
       value = node.reward + DISCOUNT_FACTOR * value
 
+  def add_exploration_noise(self, node: Node, alpha=DIRICHLET_ALPHA, frac=DIRICHLET_FRAC):
+    actions = list(node.children.keys())
+    noise = np.random.dirichlet([alpha] * len(actions))
+    for a, n in zip(actions, noise):
+      node.children[a].prior = node.children[a].prior * (1 - frac) + n * frac
+
 """ Self-play """
 
 class NetworkBuffer:
@@ -566,7 +571,6 @@ class ReplayBuffer:
     self.capacity = capacity
 
   def add_game(self, game: Game):
-    game.compute_priorities(TD_STEPS)
     self.buffer.append(game)
     if len(self.buffer) > self.capacity:
       self.buffer.pop(0)
@@ -629,6 +633,7 @@ def run_selfplay(actor_id: int, bridge: Bridge, iterations: int, Env: Environmen
   for _ in range(iterations):
     fetch_network(actor_id, network_buffer, bridge)
     game = play_game(MCTS(network_buffer.latest_network()), Env)
+    game.compute_priorities(TD_STEPS)
     bridge.send_game(game)
     # print(f"Game completed in {len(game.history)} moves")
     
@@ -639,6 +644,7 @@ def play_game(mcts: MCTS, Env: Environment):
   with torch.no_grad():
     while not game.terminal() and len(game.history) < MAX_MOVES:
       root = get_root_node(mcts, game)
+      mcts.add_exploration_noise(root)
       mcts.search(root, game.history.copy())
       action = mcts.select_action(root, len(game.history))
       game.apply(action)
@@ -650,7 +656,7 @@ def fetch_network(actor_id: int, network_buffer: NetworkBuffer, bridge: Bridge):
   if bridge.has_network(actor_id):
     network = bridge.receive_network(actor_id)
     network_buffer.save_network(network)
-    print(f"Received latest network from actor {actor_id}")
+    print(f"Actor {actor_id}: Received latest network")
 
 """ Training """
 
@@ -746,10 +752,12 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple])
   network.training_steps += 1
 
 def fetch_games(replay_buffer: ReplayBuffer, bridge: Bridge):
+  games_received = 0
   while bridge.has_game():
     game = bridge.receive_game()
     replay_buffer.add_game(game)
-    # print("Received game...")
+    games_received += 1
+  print(f"Received {games_received} games")
 
 """ Utility Functions """
 
