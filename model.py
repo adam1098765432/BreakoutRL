@@ -9,6 +9,7 @@ MAX_FLOAT = float('inf')
 STATE_SIZE = 10
 ACTION_SIZE = 3
 SUPPORT_SIZE = 601 # Categorical reward and value [-300, 300] (see Appendix F of MuZero paper)
+HIDDEN_SIZE = 16
 K_STEPS = 5
 DISCOUNT_FACTOR = 0.997
 MAX_MOVES = 10
@@ -24,13 +25,27 @@ DEFAULT_ACTION = 1
 
 """ Network """
 
+class RepresentationModel(nn.Module):
+  """
+  Take a state as input and output a latent representation.
+  """
+  def __init__(self):
+    super().__init__()
+    self.fc1 = nn.Linear(STATE_SIZE, HIDDEN_SIZE)
+    self.fc2 = nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE)
+
+  def forward(self, state):
+    x = F.relu(self.fc1(state))
+    x = F.relu(self.fc2(x))
+    return x
+
 class PredictionModel(nn.Module):
   """
   Two-headed model for predicting policy and value from a state.
   """
   def __init__(self, latent_size=16):
     super().__init__()
-    self.fc1 = nn.Linear(STATE_SIZE, latent_size)
+    self.fc1 = nn.Linear(HIDDEN_SIZE, latent_size)
     self.fc2 = nn.Linear(latent_size, latent_size)
     self.policy = nn.Linear(latent_size, ACTION_SIZE)
     self.value = nn.Linear(latent_size, SUPPORT_SIZE)
@@ -80,9 +95,9 @@ class DynamicsModel(nn.Module):
   """
   def __init__(self, latent_size=16, n_blocks=3):
     super().__init__()
-    self.first = nn.Linear(STATE_SIZE + ACTION_SIZE, latent_size)
+    self.first = nn.Linear(HIDDEN_SIZE + ACTION_SIZE, latent_size)
     self.model = nn.Sequential(*[ResBlock(latent_size) for _ in range(n_blocks)])
-    self.state = nn.Linear(latent_size, STATE_SIZE)
+    self.state = nn.Linear(latent_size, HIDDEN_SIZE)
     self.reward = nn.Linear(latent_size, SUPPORT_SIZE)
 
   def forward(self, state, action):
@@ -91,9 +106,12 @@ class DynamicsModel(nn.Module):
     x = self.model(x)
     state = F.relu(self.state(x))
     reward = self.reward(x)
+
+    # Normalize state
     state_mins = state.min(dim=1, keepdim=True)[0]
     state_maxs = state.max(dim=1, keepdim=True)[0]
     state = (state - state_mins) / (state_maxs - state_mins + 1e-6)
+    
     return state, reward
 
 class NetworkOutput:
@@ -115,24 +133,26 @@ class NetworkOutput:
     self.value = value
 
 class Network(nn.Module):
-  def __init__(self, dynamics_model: DynamicsModel, prediction_model: PredictionModel):
+  def __init__(self):
     super().__init__()
-    self.dynamics_model = dynamics_model
-    self.prediction_model = prediction_model
+    self.latent_model = RepresentationModel()
+    self.dynamics_model = DynamicsModel()
+    self.prediction_model = PredictionModel()
     self.training_steps = 0
 
   def initial_forward(self, state: torch.Tensor):
-    hidden_state, reward = self.dynamics_model(state, one_hot_action(DEFAULT_ACTION))
+    hidden_state = self.latent_model(state)
     policy_logits, value = self.prediction_model(hidden_state)
 
     value = inverse_value_transform(support_to_scalar(value))
-    reward = inverse_value_transform(support_to_scalar(reward))
 
     return NetworkOutput(hidden_state, 0.0, policy_logits, value)
   
   def initial_forward_grad(self, state: torch.Tensor):
-    hidden_state, reward = self.dynamics_model(state, one_hot_action(DEFAULT_ACTION))
+    hidden_state = self.latent_model(state)
     policy_logits, value = self.prediction_model(hidden_state)
+
+    reward = scalar_to_support(value_transform(0))
 
     return NetworkOutput(hidden_state, reward, policy_logits, value)
 
@@ -153,7 +173,7 @@ class Network(nn.Module):
 
 class UniformNetwork(Network):
   def __init__(self):
-    super().__init__(None, None)
+    super().__init__()
 
   def initial_forward(self, state):
     policy_logits = torch.ones(1, ACTION_SIZE)
@@ -298,11 +318,8 @@ class NetworkBuffer:
     
   def save_network(self, step: int, network: Network):
     # Copy state dict
-    dynamics_model = DynamicsModel()
-    prediction_model = PredictionModel()
-    dynamics_model.load_state_dict(network.dynamics_model.state_dict())
-    prediction_model.load_state_dict(network.prediction_model.state_dict())
-    net = Network(dynamics_model, prediction_model)
+    net = Network()
+    net.load_state_dict(network.state_dict())
     self.networks[step] = net
 
     # Remove old networks
@@ -573,9 +590,7 @@ def train(replay_buffer: ReplayBuffer, network_buffer: NetworkBuffer):
   Remember to scale the loss by 1 / K_STEPS to ensure the gradient has a similar magnitude
   regardless of the number of unroll steps.
   """
-  dynamics_model = DynamicsModel()
-  prediction_model = PredictionModel()
-  network = Network(dynamics_model, prediction_model)
+  network = Network()
   optimizer = torch.optim.AdamW(network.parameters(), lr=LR_INIT, weight_decay=WEIGHT_DECAY)
 
   for i in range(TRAINING_STEPS):
@@ -620,11 +635,12 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple])
       gradient_scale, value, reward, policy_logits = prediction
       target_value, target_reward, target_policy = target
 
-      raw_loss = (
-        F.cross_entropy(value, target_value) +
-        F.cross_entropy(reward, target_reward) +
-        F.kl_div(policy_logits, target_policy)
-      )
+      # Cross entropy loss with target probabilities
+      raw_loss = -(
+        (F.log_softmax(value, dim=1) * target_value).sum(dim=1) +
+        (F.log_softmax(reward, dim=1) * target_reward).sum(dim=1) +
+        (F.log_softmax(policy_logits, dim=1) * target_policy).sum(dim=1)
+      ).mean()
 
       # Weight is to account for sampling bias
       loss += weight * scale_gradient(raw_loss, gradient_scale)

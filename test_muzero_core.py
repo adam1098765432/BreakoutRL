@@ -55,7 +55,7 @@ def test_sampling_priority_absolute_difference():
 
 def test_prediction_model_output_shapes():
   model = PredictionModel()
-  state = torch.randn(1, STATE_SIZE)
+  state = torch.randn(1, HIDDEN_SIZE)
 
   policy_logits, value_logits = model(state)
 
@@ -67,13 +67,13 @@ def test_prediction_model_output_shapes():
 
 def test_dynamics_model_output_shapes_and_bounds():
   model = DynamicsModel()
-  state = torch.randn(1, STATE_SIZE)
+  state = torch.randn(1, HIDDEN_SIZE)
   action = torch.zeros(1, ACTION_SIZE)
   action[0, 1] = 1  # one-hot action
 
   next_state, reward = model(state, action)
 
-  assert next_state.shape == (1, STATE_SIZE)
+  assert next_state.shape == (1, HIDDEN_SIZE)
   assert reward.shape == (1, SUPPORT_SIZE)
 
   # State should be normalized to [0, 1]
@@ -83,7 +83,7 @@ def test_dynamics_model_output_shapes_and_bounds():
 
 def test_dynamics_model_gradient_scaling():
   model = DynamicsModel()
-  state = torch.ones(1, STATE_SIZE)
+  state = torch.ones(1, HIDDEN_SIZE)
   action = torch.zeros(1, ACTION_SIZE)
 
   next_state, _ = model(state, action)
@@ -95,7 +95,7 @@ def test_dynamics_model_gradient_scaling():
 def test_dynamics_same_action_same_state_is_deterministic():
   model = DynamicsModel()
   
-  s = torch.randn(1, STATE_SIZE)
+  s = torch.randn(1, HIDDEN_SIZE)
   a = one_hot_action(1)
 
   s1, r1 = model(s, a)
@@ -197,13 +197,11 @@ def test_ucb_score_value_influence():
 # MCTS
 
 def test_mcts_expand_node_creates_children():
-  dyn = DynamicsModel()
-  pred = PredictionModel()
-  network = Network(dyn, pred)
+  network = Network()
   mcts = MCTS(network)
 
   node = Node(prior=1.0)
-  hidden_state = torch.randn(1, STATE_SIZE)
+  hidden_state = torch.randn(1, HIDDEN_SIZE)
   action = 1
   network_output = network.recurrent_forward(hidden_state, action)
 
@@ -224,7 +222,7 @@ def test_mcts_backprop_updates_visits_and_values():
   stats = MinMaxStats()
 
   network_output = NetworkOutput(
-    hidden_state=torch.randn(1, STATE_SIZE),
+    hidden_state=torch.randn(1, HIDDEN_SIZE),
     reward=0.0,
     policy_logits=[0.5, 0.25, 0.25],
     value=2.0
@@ -239,9 +237,7 @@ def test_mcts_backprop_updates_visits_and_values():
 
 
 def test_mcts_search_requires_root_hidden_state():
-  dyn = DynamicsModel()
-  pred = PredictionModel()
-  network = Network(dyn, pred)
+  network = Network()
   mcts = MCTS(network)
   game = Game(action_space_size=ACTION_SIZE, discount_factor=DISCOUNT_FACTOR)
 
@@ -253,9 +249,7 @@ def test_mcts_search_requires_root_hidden_state():
 # Self-play
 
 def test_self_play_stats():
-  dyn = DynamicsModel()
-  pred = PredictionModel()
-  network = Network(dyn, pred)
+  network = Network()
   mcts = MCTS(network)
   
   game = play_game(mcts)
@@ -270,9 +264,7 @@ def test_self_play_stats():
     assert abs(sum(child_visits) - 1) < 1e-6
 
 def test_self_play_targets():
-  dyn = DynamicsModel()
-  pred = PredictionModel()
-  network = Network(dyn, pred)
+  network = Network()
   mcts = MCTS(network)
 
   game = play_game(mcts)
@@ -295,9 +287,7 @@ def test_self_play_targets():
 # Training
 
 def test_training():
-  dyn = DynamicsModel()
-  pred = PredictionModel()
-  network = Network(dyn, pred)
+  network = Network()
   mcts = MCTS(network)
 
   replay_buffer = ReplayBuffer(5, 1)
