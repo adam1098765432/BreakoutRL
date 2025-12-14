@@ -15,18 +15,17 @@ STATE_SIZE = 76
 ACTION_SIZE = 3
 SUPPORT_SIZE = 601 # Categorical reward and value [-300, 300] (see Appendix F of MuZero paper)
 HIDDEN_SIZE = 128
-K_STEPS = 5
 DISCOUNT_FACTOR = 0.997
 N_SIMULATIONS = 50
 MAX_MOVES = 27000 # Taken from psudo code
 LR_INIT = 0.05 # Taken from psudo code
 LR_DECAY_RATE = 0.1 # Taken from psudo code
-LR_DECAY_STEPS = 350e3 # Taken from psudo code
-TRAINING_STEPS = 1000e3 # Taken from psudo code
+LR_DECAY_STEPS = 350_000 # Taken from psudo code
+TRAINING_STEPS = 1_000_000 # Taken from psudo code
 SAVE_EVERY = 5
 UNROLL_STEPS = 5 # Unroll for K=5 steps (see MuZero Appendix G)
 TD_STEPS = 10 # Bootstrap 10 steps into the future (see MuZero Appendix G)
-WEIGHT_DECAY = 0.0001 # Taken from psudo code
+WEIGHT_DECAY = 0.0001 # Taken from psudo code (L2 regularization)
 BATCH_SIZE = 32
 NUM_ACTORS = 1
 DIRICHLET_ALPHA = 0.25
@@ -93,8 +92,8 @@ class PredictionModel(nn.Module):
     super().__init__()
     self.fc1 = nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE)
     self.fc2 = nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE)
-    self.policy = nn.Linear(HIDDEN_SIZE, ACTION_SIZE)
-    self.value = nn.Linear(HIDDEN_SIZE, SUPPORT_SIZE)
+    self.policy = nn.Linear(HIDDEN_SIZE, ACTION_SIZE) # The move to play
+    self.value = nn.Linear(HIDDEN_SIZE, SUPPORT_SIZE) # Expected final reward
 
   def forward(self, state):
     x = F.relu(self.fc1(state))
@@ -266,6 +265,8 @@ class UniformNetwork(Network):
 """ MCTS """
 
 class MinMaxStats:
+  """Keeps track of the highest and lowest mean value in the search tree."""
+
   def __init__(self, min_val=None, max_val=None):
     self.max = max_val if max_val is not None else -MAX_FLOAT
     self.min = min_val if min_val is not None else MAX_FLOAT
@@ -286,8 +287,8 @@ class Node:
   def __init__(self, prior: float):
     self.visit_count = 0
     self.to_play = -1
-    self.prior = prior
-    self.value_sum = 0
+    self.prior = prior # Probability of picking an action from this node
+    self.value_sum = 0 # Mean value
     self.children: dict[int, Node] = {}
     self.hidden_state = None
     self.reward = 0
@@ -332,6 +333,7 @@ class MCTS:
       child
     ) for action, child in node.children.items()]
     
+
     random.shuffle(scores) # Randomly break ties (stops from constantly picking the last action)
     _, action, child = max(scores)
 
@@ -340,13 +342,14 @@ class MCTS:
   def search(self, root: Node, action_history: list[int]):
     min_max_stats = MinMaxStats()
 
-    for _ in range(self.n_simulations):
+    for i in range(self.n_simulations):
       history = action_history.copy()
       node = root
       search_path = [node]
 
       while node.expanded():
         action, node = self.select_child(node, min_max_stats)
+        # if i == 0: print(node.prior)
         history.append(action)
         search_path.append(node)
 
@@ -576,9 +579,12 @@ class ReplayBuffer:
   Stores the trajectories: (prev_state, next_state, action, reward, is_done)
   """
   def __init__(self, capacity, batch_size):
-    self.buffer = []
+    self.buffer: list[Game] = []
     self.batch_size = batch_size
     self.capacity = capacity
+
+    if batch_size > capacity:
+      raise Exception("Batch size cannot be greater than capacity")
 
   def add_game(self, game: Game):
     self.buffer.append(game)
@@ -596,11 +602,11 @@ class ReplayBuffer:
     batch = []
 
     for (game, state_idx) in game_pos:
-      hidden_state = game.states[state_idx]
+      state = game.states[state_idx]
       actions = game.history[state_idx:state_idx + unroll_steps]
       targets = game.get_targets(state_idx, unroll_steps, td_steps)
       weight = sum(game.priorities) / len(game.priorities) / game.priorities[state_idx]
-      batch.append((hidden_state, actions, targets, weight))
+      batch.append((state, actions, targets, weight))
 
     return batch
 
@@ -651,7 +657,7 @@ def play_game(mcts: MCTS, Env: Environment):
   game = Game(Env=Env)
   game.states.append(game.get_current_state())
 
-  action_hist = np.array([0 for _ in range(ACTION_SIZE)])
+  action_histogram = np.array([0 for _ in range(ACTION_SIZE)])
 
   with torch.no_grad():
     while not game.terminal() and len(game.history) < MAX_MOVES:
@@ -659,12 +665,12 @@ def play_game(mcts: MCTS, Env: Environment):
       mcts.add_exploration_noise(root)
       mcts.search(root, game.history.copy())
       action = mcts.select_action(root, len(game.history))
-      action_hist[action] += 1
+      action_histogram[action] += 1
       game.apply(action)
       game.store_search_stats(root)
 
-  total_actions = np.sum(action_hist)
-  print(f"Action distribution: {(action_hist / total_actions * 100).astype(int)}")
+  total_actions = np.sum(action_histogram)
+  print(f"Action distribution: {(action_histogram / total_actions * 100).astype(int)}")
 
   return game
 
@@ -697,7 +703,7 @@ def train(replay_buffer: ReplayBuffer, bridge: Bridge):
   optimizer = torch.optim.AdamW(
     filter(lambda p: p.requires_grad, network.parameters()),
     lr=LR_INIT,
-    weight_decay=WEIGHT_DECAY
+    weight_decay=WEIGHT_DECAY # L2 regularization (keeps weights small)
   )
 
   # Wait for a game to complete
@@ -722,7 +728,6 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple])
   optimizer.param_groups[0]['lr'] = learning_rate
   optimizer.zero_grad()
   loss = 0
-  n_losses = 0
   prog_bar = tqdm(batch, desc=f"Training step {network.training_steps}")
 
   for game_state, actions, targets, weight in prog_bar:
@@ -749,19 +754,26 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple])
 
     # Accumulate predictions and targets
     for prediction, target in zip(predictions, targets):
-      gradient_scale, value, reward, policy_logits = prediction
+      # Logits
+      gradient_scale, pred_value_logits, pred_reward_logits, pred_policy_logits = prediction
+      
+      # Probabilities
       target_value, target_reward, target_policy = target
+
+      # Convert predicted logits to log probabilities
+      pred_value_log_probs = F.log_softmax(pred_value_logits, dim=1)
+      pred_reward_log_probs = F.log_softmax(pred_reward_logits, dim=1)
+      pred_policy_log_probs = F.log_softmax(pred_policy_logits, dim=1)
 
       # Cross entropy loss with target probabilities
       raw_loss = -(
-        (F.log_softmax(value, dim=1) * target_value).sum(dim=1) +
-        (F.log_softmax(reward, dim=1) * target_reward).sum(dim=1) +
-        (F.log_softmax(policy_logits, dim=1) * target_policy).sum(dim=1)
+        (pred_value_log_probs * target_value).sum(dim=1) +
+        (pred_reward_log_probs * target_reward).sum(dim=1) +
+        (pred_policy_log_probs * target_policy).sum(dim=1)
       ).mean()
 
       # Weight is to account for sampling bias
       loss += weight * scale_gradient(raw_loss, gradient_scale)
-      n_losses += 1
 
   # Backpropagate
   n_losses = len(batch) * (1 + UNROLL_STEPS)
@@ -793,6 +805,7 @@ def freeze_value_and_reward(network: Network):
 
 def launch_job(func, *args):
   p = Process(target=func, args=args)
+  p.daemon = True # Close the process if the main process is closed
   p.start()
   return p
 

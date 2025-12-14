@@ -267,8 +267,8 @@ def play(game: Game):
 
 def play_test_game():
   # network = UniformNetwork()
-  network = Network.load(NETWORK_PATH)
-  # network = Network()
+  # network = Network.load(NETWORK_PATH)
+  network = Network()
   mcts = MCTS(network)
   game = Game(Env=Breakout)
   game.states.append(game.get_current_state())
