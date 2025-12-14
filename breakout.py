@@ -283,5 +283,5 @@ def train_breakout():
 
 if __name__ == "__main__":
   freeze_support()
-  play_test_game()
-  # train_breakout()
+  # play_test_game()
+  train_breakout()
