@@ -1,4 +1,7 @@
-from multiprocessing import Process
+from multiprocessing import Process, Queue
+from tqdm import tqdm
+import os
+import time
 import numpy as np
 import torch
 import torch.nn as nn
@@ -19,12 +22,50 @@ LR_INIT = 0.05 # Taken from psudo code
 LR_DECAY_RATE = 0.1 # Taken from psudo code
 LR_DECAY_STEPS = 350e3 # Taken from psudo code
 TRAINING_STEPS = 1000e3 # Taken from psudo code
-SAVE_EVERY = 100
+SAVE_EVERY = 2
 UNROLL_STEPS = 5 # Unroll for K=5 steps (see MuZero Appendix G)
 TD_STEPS = 10 # Bootstrap 10 steps into the future (see MuZero Appendix G)
 WEIGHT_DECAY = 0.0001 # Taken from psudo code
-BATCH_SIZE = 1024 # Taken from psudo code
-NUM_ACTORS = 350 # Taken from psudo code
+BATCH_SIZE = 128
+NUM_ACTORS = 4
+NETWORK_PATH = "Models/network.pt"
+
+""" Threading """
+
+class Bridge:
+  def __init__(self, max_games=1000, num_actors=NUM_ACTORS):
+    self.num_actors = num_actors
+    self.game_queue = Queue(maxsize=max_games)
+    self.weight_queue = [Queue(maxsize=1) for _ in range(num_actors)]
+
+  def send_game(self, game):
+    self.game_queue.put(game)
+
+  def receive_game(self):
+    return self.game_queue.get()
+
+  def has_game(self):
+    return not self.game_queue.empty()
+
+  def has_network(self, actor_id):
+    return not self.weight_queue[actor_id].empty()
+
+  def broadcast_network(self, network):
+    state_dict = network.state_dict()
+    # Send new weights to all actors
+    for actor_id in range(self.num_actors):
+      # Drop old weights, keep only newest
+      while not self.weight_queue[actor_id].empty():
+        self.weight_queue[actor_id].get()
+      # Send new weights
+      self.weight_queue[actor_id].put(state_dict)
+
+  def receive_network(self, actor_id):
+    if not self.weight_queue[actor_id].empty():
+      network = Network()
+      network.load_state_dict(self.weight_queue[actor_id].get())
+      return network
+    return UniformNetwork()
 
 """ Network """
 
@@ -174,6 +215,30 @@ class Network(nn.Module):
 
     return NetworkOutput(hidden_state, reward, policy_logits, value)
 
+  @staticmethod
+  def save(network: nn.Module, path: str):
+    try:
+      torch.save({
+        'model': network.state_dict(),
+        'steps': network.training_steps
+      }, path + '.tmp')
+      os.replace(path + '.tmp', path)
+    except Exception as e:
+      print(f"Failed to save model: {e}")
+    
+  @staticmethod
+  def load(path: str):
+    try:
+      checkpoint = torch.load(path)
+      network = Network()
+      network.load_state_dict(checkpoint['model'])
+      network.training_steps = checkpoint['steps']
+      return network
+    except Exception as e:
+      print(f"Failed to load model: {e}")
+      print('Making a new model...')
+      return Network()
+
 class UniformNetwork(Network):
   def __init__(self):
     super().__init__()
@@ -310,24 +375,13 @@ class MCTS:
 
 class NetworkBuffer:
   def __init__(self):
-    self.networks: dict[int, Network] = {}
-    self.max_buffer_size = 1
+    self.network = UniformNetwork()
 
   def latest_network(self):
-    if len(self.networks) > 0:
-      return self.networks[max(self.networks.keys())] # Return the latest network
-    else:
-      return UniformNetwork() # Default
+    return self.network
     
-  def save_network(self, step: int, network: Network):
-    # Copy state dict
-    net = Network()
-    net.load_state_dict(network.state_dict())
-    self.networks[step] = net
-
-    # Remove old networks
-    if len(self.networks) > self.max_buffer_size:
-      self.networks.pop(min(self.networks.keys()))
+  def save_network(self, network: Network):
+    self.network = network
 
 class Environment:
   def __init__(self):
@@ -568,13 +622,18 @@ def get_root_node(mcts: MCTS, game: Game):
   mcts.expand_node(root, network_output)
   return root
 
-def run_selfplay(replay_buffer: ReplayBuffer, network_buffer: NetworkBuffer, iterations: int):
+def run_selfplay(actor_id: int, bridge: Bridge, iterations: int, Env: Environment):
+  iterations = int(iterations)
+  network_buffer = NetworkBuffer()
+  print(f"Playing {iterations} games...")
   for _ in range(iterations):
-    game = play_game(MCTS(network_buffer.latest_network()))
-    replay_buffer.add_game(game)
-
-def play_game(mcts: MCTS):
-  game = Game(action_space_size=ACTION_SIZE, discount_factor=DISCOUNT_FACTOR)
+    fetch_network(actor_id, network_buffer, bridge)
+    game = play_game(MCTS(network_buffer.latest_network()), Env)
+    bridge.send_game(game)
+    # print(f"Game completed in {len(game.history)} moves")
+    
+def play_game(mcts: MCTS, Env: Environment):
+  game = Game(Env=Env)
   game.states.append(game.get_current_state())
 
   with torch.no_grad():
@@ -584,18 +643,26 @@ def play_game(mcts: MCTS):
       action = mcts.select_action(root, len(game.history))
       game.apply(action)
       game.store_search_stats(root)
-  
+
   return game
+
+def fetch_network(actor_id: int, network_buffer: NetworkBuffer, bridge: Bridge):
+  if bridge.has_network(actor_id):
+    network = bridge.receive_network(actor_id)
+    network_buffer.save_network(network)
+    print(f"Received latest network from actor {actor_id}")
 
 """ Training """
 
-def muzero(replay_buffer: ReplayBuffer, network_buffer: NetworkBuffer):
-  for _ in range(NUM_ACTORS):
-    launch_job(run_selfplay, replay_buffer, network_buffer)
+def muzero(replay_buffer: ReplayBuffer, Env: Environment):
+  bridge = Bridge()
 
-  train(replay_buffer, network_buffer)
+  for actor_id in range(NUM_ACTORS):
+    launch_job(run_selfplay, actor_id, bridge, TRAINING_STEPS // NUM_ACTORS, Env)
 
-def train(replay_buffer: ReplayBuffer, network_buffer: NetworkBuffer):
+  train(replay_buffer, bridge)
+
+def train(replay_buffer: ReplayBuffer, bridge: Bridge):
   """
   Training loop.
   
@@ -603,16 +670,25 @@ def train(replay_buffer: ReplayBuffer, network_buffer: NetworkBuffer):
   Remember to scale the loss by 1 / K_STEPS to ensure the gradient has a similar magnitude
   regardless of the number of unroll steps.
   """
-  network = Network()
+  network = Network.load(NETWORK_PATH)
   optimizer = torch.optim.AdamW(network.parameters(), lr=LR_INIT, weight_decay=WEIGHT_DECAY)
 
-  for i in range(TRAINING_STEPS):
-    if i % SAVE_EVERY == 0:
-      network_buffer.save_network(i, network)
+  # Wait for a game to complete
+  attempts = 0
+  while len(replay_buffer.buffer) < 1:
+    attempts += 1
+    fetch_games(replay_buffer, bridge)
+    print("Waiting for a game to complete, attempt", attempts)
+    time.sleep(5)
+
+  print("Training...")
+  for i in range(int(TRAINING_STEPS)):
+    fetch_games(replay_buffer, bridge)
+    if (i + 1) % SAVE_EVERY == 0:
+      bridge.broadcast_network(network)
+      Network.save(network, NETWORK_PATH)
     batch = replay_buffer.sample_batch(UNROLL_STEPS, TD_STEPS)
     update_weights(optimizer, network, batch)
-  
-  network_buffer.save_network(TRAINING_STEPS, network)
 
 def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple]):
   learning_rate = LR_INIT * LR_DECAY_RATE ** (network.training_steps / LR_DECAY_STEPS)
@@ -620,8 +696,9 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple])
   optimizer.zero_grad()
   loss = 0
   n_losses = 0
+  prog_bar = tqdm(batch, desc=f"Training step {network.training_steps}")
 
-  for game_state, actions, targets, weight in batch:
+  for game_state, actions, targets, weight in prog_bar:
     
     # Initial step
     network_output = network.initial_forward_grad(game_state)
@@ -662,10 +739,17 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple])
   # Backpropagate
   n_losses = len(batch) * (1 + UNROLL_STEPS)
   loss = loss / n_losses
+  print(f"Loss: {loss}")
   loss.backward()
   torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
   optimizer.step()
   network.training_steps += 1
+
+def fetch_games(replay_buffer: ReplayBuffer, bridge: Bridge):
+  while bridge.has_game():
+    game = bridge.receive_game()
+    replay_buffer.add_game(game)
+    # print("Received game...")
 
 """ Utility Functions """
 

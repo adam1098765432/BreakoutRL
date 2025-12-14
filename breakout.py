@@ -1,9 +1,22 @@
 import enum
+from multiprocessing import freeze_support
 from typing import Callable
 import numpy as np
 import pygame
 import torch
-from model import Environment, Game, MCTS, Network, UniformNetwork, get_root_node
+from model import (
+  Environment,
+  Game,
+  MCTS,
+  Network,
+  NetworkBuffer,
+  ReplayBuffer,
+  UniformNetwork,
+  get_root_node,
+  muzero,
+  BATCH_SIZE,
+  NETWORK_PATH
+)
 
 # Game parameters
 BRICK_ROWS = 7
@@ -247,7 +260,8 @@ def play(game: Game):
   live(game, get_action)
 
 def play_test_game():
-  network = UniformNetwork()
+  # network = UniformNetwork()
+  network = Network.load(NETWORK_PATH)
   mcts = MCTS(network)
   game = Game(Env=Breakout)
   game.states.append(game.get_current_state())
@@ -261,4 +275,11 @@ def play_test_game():
 
   live(game, get_action)
 
-play_test_game()
+def train_breakout():
+  replay_buffer = ReplayBuffer(100, BATCH_SIZE)
+  muzero(replay_buffer, Breakout)
+
+if __name__ == "__main__":
+  freeze_support()
+  # play_test_game()
+  train_breakout()
