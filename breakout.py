@@ -72,6 +72,9 @@ class Breakout(Environment):
     state = self.state
     reward = 0.001
 
+    if action == 2:
+      reward -= 0.001
+
     # Move paddle
     if action == 0:
       state[0, IDX.PADDLE_X] -= PADDLE_SPEED
@@ -265,6 +268,7 @@ def play(game: Game):
 def play_test_game():
   # network = UniformNetwork()
   network = Network.load(NETWORK_PATH)
+  # network = Network()
   mcts = MCTS(network)
   game = Game(Env=Breakout)
   game.states.append(game.get_current_state())

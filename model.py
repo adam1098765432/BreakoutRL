@@ -232,6 +232,7 @@ class Network(nn.Module):
       network = Network()
       network.load_state_dict(checkpoint['model'])
       network.training_steps = checkpoint['steps']
+      print(f"Loaded model from {path}")
       return network
     except Exception as e:
       print(f"Failed to load model: {e}")
@@ -325,11 +326,14 @@ class MCTS:
     return list(actions)[action_idx]
 
   def select_child(self, node: Node, min_max_stats: MinMaxStats):
-    _, action, child = max((
+    scores = [(
       ucb_score(node, child, min_max_stats),
       action,
       child
-    ) for action, child in node.children.items())
+    ) for action, child in node.children.items()]
+    
+    random.shuffle(scores) # Randomly break ties (stops from constantly picking the last action)
+    _, action, child = max(scores)
 
     return action, child
 
@@ -349,10 +353,15 @@ class MCTS:
       parent = search_path[-2]
       network_output = self.network.recurrent_forward(parent.hidden_state, action)
 
+      # print(network_output.policy_logits)
+
       self.expand_node(node, network_output)
       self.backprop(search_path, network_output, min_max_stats)
   
   def expand_node(self, node: Node, network_output: NetworkOutput):
+    if node.expanded():
+      raise Exception("Tried to expand node twice")
+
     node.hidden_state = network_output.hidden_state
     node.reward = network_output.reward
     priors = torch.softmax(network_output.policy_logits, dim=1)[0].tolist()
@@ -381,6 +390,7 @@ class MCTS:
 class NetworkBuffer:
   def __init__(self):
     self.network = UniformNetwork()
+    # self.network = Network()
 
   def latest_network(self):
     return self.network
@@ -513,7 +523,7 @@ class Game:
         targets.append((
           scalar_to_support(value_transform(0.0)),
           scalar_to_support(value_transform(last_reward)),
-          torch.ones(size=(1, self.action_space_size))
+          torch.ones(size=(1, self.action_space_size)) / self.action_space_size
         ))
 
     return targets
@@ -683,7 +693,7 @@ def train(replay_buffer: ReplayBuffer, bridge: Bridge):
   regardless of the number of unroll steps.
   """
   network = Network.load(NETWORK_PATH)
-  freeze_value_and_reward(network)
+  # freeze_value_and_reward(network)
   optimizer = torch.optim.AdamW(
     filter(lambda p: p.requires_grad, network.parameters()),
     lr=LR_INIT,
@@ -744,8 +754,8 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple])
 
       # Cross entropy loss with target probabilities
       raw_loss = -(
-        # (F.log_softmax(value, dim=1) * target_value).sum(dim=1) +
-        # (F.log_softmax(reward, dim=1) * target_reward).sum(dim=1) +
+        (F.log_softmax(value, dim=1) * target_value).sum(dim=1) +
+        (F.log_softmax(reward, dim=1) * target_reward).sum(dim=1) +
         (F.log_softmax(policy_logits, dim=1) * target_policy).sum(dim=1)
       ).mean()
 
@@ -756,7 +766,7 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple])
   # Backpropagate
   n_losses = len(batch) * (1 + UNROLL_STEPS)
   loss = loss / n_losses
-  print(f"Loss: {loss}, Pred weight norm: {network.prediction_model.value.weight.norm()}")
+  print(f"Loss: {loss}")
   loss.backward()
   torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
   optimizer.step()
