@@ -23,12 +23,12 @@ LR_INIT = 0.05 # Taken from psudo code
 LR_DECAY_RATE = 0.1 # Taken from psudo code
 LR_DECAY_STEPS = 350e3 # Taken from psudo code
 TRAINING_STEPS = 1000e3 # Taken from psudo code
-SAVE_EVERY = 2
+SAVE_EVERY = 5
 UNROLL_STEPS = 5 # Unroll for K=5 steps (see MuZero Appendix G)
 TD_STEPS = 10 # Bootstrap 10 steps into the future (see MuZero Appendix G)
 WEIGHT_DECAY = 0.0001 # Taken from psudo code
-BATCH_SIZE = 128
-NUM_ACTORS = 4
+BATCH_SIZE = 32
+NUM_ACTORS = 1
 DIRICHLET_ALPHA = 0.25
 DIRICHLET_FRAC = 0.25
 
