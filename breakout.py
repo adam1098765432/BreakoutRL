@@ -1,8 +1,9 @@
 import enum
+from typing import Callable
 import numpy as np
 import pygame
 import torch
-from model import Environment
+from model import Environment, Game, MCTS, Network, UniformNetwork, get_root_node
 
 # Game parameters
 BRICK_ROWS = 7
@@ -80,7 +81,8 @@ class Breakout(Environment):
     elif state[0, IDX.BALL_Y] > 1 - BALL_RADIUS:
       state[0, IDX.BALL_Y] = 1 - BALL_RADIUS
       state[0, IDX.BALL_VY] = -state[0, IDX.BALL_VY]
-      reward -= 100
+      ball_to_paddle = abs(state[0, IDX.BALL_Y].item() - PADDLE_Y)
+      reward -= 10 * ball_to_paddle
       self.is_done = True
 
     # Constrain ball horizontally
@@ -201,7 +203,7 @@ def show(state: torch.Tensor):
 
   pygame.quit()
 
-def play(env: Breakout):
+def live(game: Game, get_action: Callable[[torch.Tensor], int]):
   screen_width, screen_height = 600, 700
   pygame.init()
   screen = pygame.display.set_mode((screen_width, screen_height))
@@ -216,21 +218,47 @@ def play(env: Breakout):
         running = False
 
     # Get action
-    action = 2
-    if event.type == pygame.KEYDOWN:
-      if event.key == pygame.K_LEFT:
-        action = 0
-      elif event.key == pygame.K_RIGHT:
-        action = 1
+    action = get_action()
 
     # Update state
-    if not env.terminal():
-      state, _ = env.step(action)
+    if not game.terminal():
+      game.apply(action)
+    else:
+      game.reset()
 
-    render(state, screen, screen_width, screen_height)
+    render(game.get_current_state(), screen, screen_width, screen_height)
     
     pygame.display.flip()
 
   pygame.quit()
 
-play(Breakout())
+def play(game: Game):
+  def get_action():
+    action = 2
+    if pygame.key.get_pressed()[pygame.K_LEFT]:
+      action = 0
+    if pygame.key.get_pressed()[pygame.K_RIGHT]:
+      if action == 0:
+        action = 2
+      else:
+        action = 1
+    return action
+
+  live(game, get_action)
+
+def play_test_game():
+  network = UniformNetwork()
+  mcts = MCTS(network)
+  game = Game(Env=Breakout)
+  game.states.append(game.get_current_state())
+
+  def get_action():
+    with torch.no_grad():
+      root = get_root_node(mcts, game)
+      mcts.search(root, game.history.copy())
+      action = mcts.select_action(root, len(game.history))
+      return action
+
+  live(game, get_action)
+
+play_test_game()

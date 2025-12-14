@@ -46,12 +46,12 @@ class PredictionModel(nn.Module):
   """
   Two-headed model for predicting policy and value from a state.
   """
-  def __init__(self, latent_size=16):
+  def __init__(self):
     super().__init__()
-    self.fc1 = nn.Linear(HIDDEN_SIZE, latent_size)
-    self.fc2 = nn.Linear(latent_size, latent_size)
-    self.policy = nn.Linear(latent_size, ACTION_SIZE)
-    self.value = nn.Linear(latent_size, SUPPORT_SIZE)
+    self.fc1 = nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE)
+    self.fc2 = nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE)
+    self.policy = nn.Linear(HIDDEN_SIZE, ACTION_SIZE)
+    self.value = nn.Linear(HIDDEN_SIZE, SUPPORT_SIZE)
 
   def forward(self, state):
     x = F.relu(self.fc1(state))
@@ -96,12 +96,12 @@ class DynamicsModel(nn.Module):
   :param latent_size: The number of channels in the latent representation.
   :param n_blocks: The number of residual blocks.
   """
-  def __init__(self, latent_size=16, n_blocks=3):
+  def __init__(self, n_blocks=2):
     super().__init__()
-    self.first = nn.Linear(HIDDEN_SIZE + ACTION_SIZE, latent_size)
-    self.model = nn.Sequential(*[ResBlock(latent_size) for _ in range(n_blocks)])
-    self.state = nn.Linear(latent_size, HIDDEN_SIZE)
-    self.reward = nn.Linear(latent_size, SUPPORT_SIZE)
+    self.first = nn.Linear(HIDDEN_SIZE + ACTION_SIZE, HIDDEN_SIZE)
+    self.model = nn.Sequential(*[ResBlock(HIDDEN_SIZE) for _ in range(n_blocks)])
+    self.state = nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE)
+    self.reward = nn.Linear(HIDDEN_SIZE, SUPPORT_SIZE)
 
   def forward(self, state, action):
     x = torch.cat([state, action], dim=1)
@@ -355,15 +355,25 @@ class Game:
   A single episode of interaction with the environment.
   """
 
-  def __init__(self, action_space_size: int, discount_factor: float):
+  def __init__(self, action_space_size=ACTION_SIZE, discount_factor=DISCOUNT_FACTOR, Env=Environment):
+    self.Env = Env
     self.action_space_size = action_space_size
     self.discount_factor = discount_factor
-    self.environment = Environment()
+    self.environment = Env()
     self.history = []
     self.rewards = []
     self.child_visits = []
     self.root_values = []
     self.states: list[torch.Tensor] = []
+    self.priorities = []
+
+  def reset(self):
+    self.environment = self.Env()
+    self.history = []
+    self.rewards = []
+    self.child_visits = []
+    self.root_values = []
+    self.states = []
     self.priorities = []
 
   def terminal(self):
