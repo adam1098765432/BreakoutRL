@@ -756,7 +756,7 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple])
   # Backpropagate
   n_losses = len(batch) * (1 + UNROLL_STEPS)
   loss = loss / n_losses
-  print(f"Loss: {loss}, Pred weight norm: {network.prediction_model.weight_norm()}")
+  print(f"Loss: {loss}, Pred weight norm: {network.prediction_model.value.weight.norm()}")
   loss.backward()
   torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
   optimizer.step()
