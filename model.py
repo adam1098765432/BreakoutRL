@@ -1,3 +1,4 @@
+from multiprocessing import Process
 import numpy as np
 import torch
 import torch.nn as nn
@@ -6,22 +7,24 @@ import random
 
 # Training parameters
 MAX_FLOAT = float('inf')
-STATE_SIZE = 10
+STATE_SIZE = 76
 ACTION_SIZE = 3
 SUPPORT_SIZE = 601 # Categorical reward and value [-300, 300] (see Appendix F of MuZero paper)
-HIDDEN_SIZE = 16
+HIDDEN_SIZE = 128
 K_STEPS = 5
 DISCOUNT_FACTOR = 0.997
-MAX_MOVES = 10
-LR_INIT = 0.05
-LR_DECAY_RATE = 0.95
-LR_DECAY_STEPS = 10
-TRAINING_STEPS = 50
-SAVE_EVERY = 10
-UNROLL_STEPS = 5
-TD_STEPS = 5
-WEIGHT_DECAY = 0.0001
-DEFAULT_ACTION = 1
+N_SIMULATIONS = 50
+MAX_MOVES = 27000 # Taken from psudo code
+LR_INIT = 0.05 # Taken from psudo code
+LR_DECAY_RATE = 0.1 # Taken from psudo code
+LR_DECAY_STEPS = 350e3 # Taken from psudo code
+TRAINING_STEPS = 1000e3 # Taken from psudo code
+SAVE_EVERY = 100
+UNROLL_STEPS = 5 # Unroll for K=5 steps (see MuZero Appendix G)
+TD_STEPS = 10 # Bootstrap 10 steps into the future (see MuZero Appendix G)
+WEIGHT_DECAY = 0.0001 # Taken from psudo code
+BATCH_SIZE = 1024 # Taken from psudo code
+NUM_ACTORS = 350 # Taken from psudo code
 
 """ Network """
 
@@ -241,7 +244,7 @@ class MCTS:
   """
   def __init__(self, network: Network):
     self.network = network
-    self.n_simulations = 50
+    self.n_simulations = N_SIMULATIONS
 
   def select_action(self, node: Node, num_moves: int) -> int:
     """
@@ -576,11 +579,11 @@ def play_game(mcts: MCTS):
 
 """ Training """
 
-def scale_gradient(tensor, scale):
-  """
-  Scales the gradient by a factor.
-  """
-  return tensor * scale + tensor.detach() * (1 - scale)
+def muzero(replay_buffer: ReplayBuffer, network_buffer: NetworkBuffer):
+  for _ in range(NUM_ACTORS):
+    launch_job(run_selfplay, replay_buffer, network_buffer)
+
+  train(replay_buffer, network_buffer)
 
 def train(replay_buffer: ReplayBuffer, network_buffer: NetworkBuffer):
   """
@@ -656,8 +659,24 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple])
 
 """ Utility Functions """
 
+def launch_job(func, *args):
+  p = Process(target=func, args=args)
+  p.start()
+  return p
+
+def scale_gradient(tensor, scale):
+  """
+  Scales the gradient by a factor.
+  """
+  return tensor * scale + tensor.detach() * (1 - scale)
+
 def get_temperature(num_moves, training_steps):
-  return 1
+  if training_steps < 500e3:
+    return 1.0
+  elif training_steps < 750e3:
+    return 0.5
+  else:
+    return 0.25
 
 def scale_targets(x, eps=1e-3):
   """
