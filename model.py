@@ -641,14 +641,20 @@ def play_game(mcts: MCTS, Env: Environment):
   game = Game(Env=Env)
   game.states.append(game.get_current_state())
 
+  action_hist = np.array([0 for _ in range(ACTION_SIZE)])
+
   with torch.no_grad():
     while not game.terminal() and len(game.history) < MAX_MOVES:
       root = get_root_node(mcts, game)
       mcts.add_exploration_noise(root)
       mcts.search(root, game.history.copy())
       action = mcts.select_action(root, len(game.history))
+      action_hist[action] += 1
       game.apply(action)
       game.store_search_stats(root)
+
+  total_actions = np.sum(action_hist)
+  print(f"Action distribution: {(action_hist / total_actions * 100).astype(int)}")
 
   return game
 
@@ -677,7 +683,12 @@ def train(replay_buffer: ReplayBuffer, bridge: Bridge):
   regardless of the number of unroll steps.
   """
   network = Network.load(NETWORK_PATH)
-  optimizer = torch.optim.AdamW(network.parameters(), lr=LR_INIT, weight_decay=WEIGHT_DECAY)
+  freeze_value_and_reward(network)
+  optimizer = torch.optim.AdamW(
+    filter(lambda p: p.requires_grad, network.parameters()),
+    lr=LR_INIT,
+    weight_decay=WEIGHT_DECAY
+  )
 
   # Wait for a game to complete
   attempts = 0
@@ -733,8 +744,8 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple])
 
       # Cross entropy loss with target probabilities
       raw_loss = -(
-        (F.log_softmax(value, dim=1) * target_value).sum(dim=1) +
-        (F.log_softmax(reward, dim=1) * target_reward).sum(dim=1) +
+        # (F.log_softmax(value, dim=1) * target_value).sum(dim=1) +
+        # (F.log_softmax(reward, dim=1) * target_reward).sum(dim=1) +
         (F.log_softmax(policy_logits, dim=1) * target_policy).sum(dim=1)
       ).mean()
 
@@ -745,7 +756,7 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple])
   # Backpropagate
   n_losses = len(batch) * (1 + UNROLL_STEPS)
   loss = loss / n_losses
-  print(f"Loss: {loss}")
+  print(f"Loss: {loss}, Pred weight norm: {network.prediction_model.weight_norm()}")
   loss.backward()
   torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
   optimizer.step()
@@ -758,6 +769,15 @@ def fetch_games(replay_buffer: ReplayBuffer, bridge: Bridge):
     replay_buffer.add_game(game)
     games_received += 1
   print(f"Received {games_received} games")
+
+def freeze_value_and_reward(network: Network):
+  # Freeze value head
+  for p in network.prediction_model.value.parameters():
+    p.requires_grad = False
+
+  # Freeze reward head
+  for p in network.dynamics_model.reward.parameters():
+    p.requires_grad = False
 
 """ Utility Functions """
 

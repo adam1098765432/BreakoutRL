@@ -4,6 +4,7 @@ from typing import Callable
 import numpy as np
 import pygame
 import torch
+import sys
 from model import (
   Environment,
   Game,
@@ -283,5 +284,7 @@ def train_breakout():
 
 if __name__ == "__main__":
   freeze_support()
-  # play_test_game()
-  train_breakout()
+  if '--test' in sys.argv:
+    play_test_game()
+  else:
+    train_breakout()
