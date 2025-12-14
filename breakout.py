@@ -82,10 +82,10 @@ class Breakout(Environment):
       state[0, IDX.PADDLE_X] += PADDLE_SPEED
 
     # Constrain paddle
-    if state[0, IDX.PADDLE_X] < 0:
-      state[0, IDX.PADDLE_X] = 0
-    if state[0, IDX.PADDLE_X] > 1:
-      state[0, IDX.PADDLE_X] = 1
+    if state[0, IDX.PADDLE_X] < HALF_PADDLE_WIDTH:
+      state[0, IDX.PADDLE_X] = HALF_PADDLE_WIDTH
+    if state[0, IDX.PADDLE_X] > 1 - HALF_PADDLE_WIDTH:
+      state[0, IDX.PADDLE_X] = 1 - HALF_PADDLE_WIDTH
 
     # Move ball
     state[0, IDX.BALL_X] += state[0, IDX.BALL_VX]
@@ -267,8 +267,8 @@ def play(game: Game):
 
 def play_test_game():
   # network = UniformNetwork()
-  # network = Network.load(NETWORK_PATH)
-  network = Network()
+  network = Network.load(NETWORK_PATH)
+  # network = Network()
   mcts = MCTS(network)
   game = Game(Env=Breakout)
   game.states.append(game.get_current_state())

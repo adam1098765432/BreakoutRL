@@ -332,7 +332,6 @@ class MCTS:
       action,
       child
     ) for action, child in node.children.items()]
-    
 
     random.shuffle(scores) # Randomly break ties (stops from constantly picking the last action)
     _, action, child = max(scores)
