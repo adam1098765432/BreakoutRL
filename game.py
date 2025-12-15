@@ -84,6 +84,9 @@ class Game:
   def legal_actions(self):
     return [i for i in range(ACTION_SIZE)]
   
+  def apply_action(self, action: int):
+    self.environment.step(action)
+
   def apply(self, action: int, root: Node):
     state, reward = self.environment.step(action)
     mcts_value = root.value()

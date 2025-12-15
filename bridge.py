@@ -9,6 +9,18 @@ class Bridge:
     self.num_actors = num_actors
     self.game_queue = Queue(maxsize=max_games)
     self.weight_queue = [Queue(maxsize=1) for _ in range(num_actors)]
+    self.log_queue = Queue(maxsize=1)
+
+  def send_log(self, log: dict[str, str]):
+    if self.log_queue.full():
+      self.log_queue.get()
+    self.log_queue.put(log)
+
+  def receive_log(self) -> dict[str, str]:
+    return self.log_queue.get()
+
+  def has_log(self):
+    return not self.log_queue.empty()
 
   def send_game(self, game: Game):
     self.game_queue.put(Game.serealize(game))
@@ -18,9 +30,6 @@ class Bridge:
 
   def has_game(self):
     return not self.game_queue.empty()
-
-  def has_network(self, actor_id):
-    return not self.weight_queue[actor_id].empty()
 
   def broadcast_network(self, network: Network):
     # Move to cpu before sending to actors
@@ -43,6 +52,9 @@ class Bridge:
       return network
     return UniformNetwork()
   
+  def has_network(self, actor_id):
+    return not self.weight_queue[actor_id].empty()
+
 class NetworkBuffer:
   def __init__(self):
     self.network = self.load_network()

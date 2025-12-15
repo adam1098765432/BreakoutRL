@@ -26,30 +26,34 @@ def run_selfplay(actor_id: int, bridge: Bridge, iterations: int, Env: Environmen
   print(f"Playing {iterations} games...")
   for _ in range(iterations):
     fetch_network(actor_id, network_buffer, bridge)
-    game = play_game(MCTS(network_buffer.latest_network()), Env)
+    game = play_game(MCTS(network_buffer.latest_network()), Env, bridge)
     game.compute_priorities(TD_STEPS)
     bridge.send_game(game)
     # print(f"Game completed in {len(game.history)} moves")
 
-def play_game(mcts: MCTS, Env: Environment):
+def play_game(mcts: MCTS, Env: Environment, bridge: Bridge):
   game = Game(Env=Env)
   
   # Are we supposed to add an initial observation?
   # game.states.append(game.get_current_state())
 
-  action_histogram = np.array([0 for _ in range(ACTION_SIZE)])
+  action_histogram = [0] * ACTION_SIZE
 
   with torch.no_grad():
     while not game.terminal() and len(game.observations) < MAX_MOVES:
       root = get_root_node(mcts, game)
       mcts.add_exploration_noise(root)
       mcts.search(root)
-      action = mcts.select_action(root, len(game.observations))
+      action = mcts.select_action(root)
       action_histogram[action] += 1
       game.apply(action, root)
 
-  # total_actions = np.sum(action_histogram)
-  # print(f"Action distribution: {(action_histogram / total_actions * 100).astype(int)}")
+  logs = {
+    "Actions": ' '.join([f"{(action_histogram[i] / len(game.observations)):.2f}" for i in range(ACTION_SIZE)]),
+    "Length": f"{len(game.observations):>5d}",
+  }
+
+  bridge.send_log(logs)
 
   return game
 

@@ -28,7 +28,7 @@ class PredictionModel(nn.Module):
     self.reduce_policy = nn.Linear(HIDDEN_SIZE, 4)
     self.reduce_value = nn.Linear(HIDDEN_SIZE, 4)
     self.policy = nn.Linear(4, ACTION_SIZE) # The move to play
-    self.value = nn.Linear(4, SUPPORT_SIZE) # Expected final reward
+    self.value = nn.Linear(4, 2 * SUPPORT_SIZE + 1) # Expected final reward
 
     # Zero initialize value head
     nn.init.zeros_(self.value.weight)
@@ -92,7 +92,7 @@ class DynamicsModel(nn.Module):
     super().__init__()
     self.model = nn.Sequential(*[ResBlock(HIDDEN_SIZE + ACTION_SIZE) for _ in range(n_blocks)])
     self.state = nn.Linear(HIDDEN_SIZE + ACTION_SIZE, HIDDEN_SIZE)
-    self.reward = nn.Linear(HIDDEN_SIZE + ACTION_SIZE, SUPPORT_SIZE)
+    self.reward = nn.Linear(HIDDEN_SIZE + ACTION_SIZE, 2 * SUPPORT_SIZE + 1)
 
     # Initialize reward head with zeros
     nn.init.zeros_(self.reward.weight)
@@ -142,7 +142,7 @@ class Network(nn.Module):
     hidden_state = self.latent_model(state)
     policy_logits, value = self.prediction_model(hidden_state)
 
-    value = inverse_value_transform(support_to_scalar(value))
+    value = support_to_scalar(value)
 
     return NetworkOutput(hidden_state, 0.0, policy_logits, value)
   
@@ -150,7 +150,7 @@ class Network(nn.Module):
     hidden_state = self.latent_model(state)
     policy_logits, value = self.prediction_model(hidden_state)
 
-    reward = scalar_to_support(value_transform(0))
+    reward = scalar_to_support(0)
 
     return NetworkOutput(hidden_state, reward, policy_logits, value)
 
@@ -158,8 +158,8 @@ class Network(nn.Module):
     hidden_state, reward = self.dynamics_model(state, one_hot_action(action))
     policy_logits, value = self.prediction_model(hidden_state)
 
-    value = inverse_value_transform(support_to_scalar(value))
-    reward = inverse_value_transform(support_to_scalar(reward))
+    value = support_to_scalar(value)
+    reward = support_to_scalar(reward)
 
     return NetworkOutput(hidden_state, reward, policy_logits, value)
   
@@ -206,8 +206,8 @@ class UniformNetwork(Network):
   def initial_forward_grad(self, state):
     hidden_state = torch.ones(1, HIDDEN_SIZE, device=device)
     policy_logits = torch.ones(1, ACTION_SIZE, device=device)
-    reward = scalar_to_support(value_transform(0))
-    value = scalar_to_support(value_transform(0))
+    reward = scalar_to_support(0)
+    value = scalar_to_support(0)
     return NetworkOutput(hidden_state, reward, policy_logits, value)
 
   def recurrent_forward(self, state: torch.Tensor, action: int):
@@ -218,6 +218,6 @@ class UniformNetwork(Network):
   def recurrent_forward_grad(self, state: torch.Tensor, action: int):
     hidden_state = torch.ones(1, HIDDEN_SIZE, device=device)
     policy_logits = torch.ones(1, ACTION_SIZE, device=device)
-    reward = scalar_to_support(value_transform(0))
-    value = scalar_to_support(value_transform(0))
+    reward = scalar_to_support(0)
+    value = scalar_to_support(0)
     return NetworkOutput(hidden_state, reward, policy_logits, value)

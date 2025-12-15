@@ -51,8 +51,8 @@ class ReplayBuffer:
         target_policy = game.get_target_policy(observation_idx + j)
 
         # Convert to probability distributions
-        target_value = scalar_to_support(value_transform(target_value))
-        target_reward = scalar_to_support(value_transform(target_reward))
+        target_value = scalar_to_support(target_value)
+        target_reward = scalar_to_support(target_reward)
         target_policy = torch.tensor(target_policy, device=device)
 
         # Add to batch

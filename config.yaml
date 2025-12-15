@@ -1,7 +1,7 @@
 network_path: "Models/network.pt"
 state_size: 76
 action_size: 3
-support_size: 11 # Categorical reward and value (see Appendix F of MuZero paper)
+support_size: 10 # Categorical reward and value (see Appendix F of MuZero paper)
 hidden_size: 16
 discount_factor: 0.997
 n_simulations: 30
@@ -11,7 +11,7 @@ lr_decay_rate: 1 # Taken from psudo code (1 = constant learning rate)
 lr_decay_steps: 10000 # Taken from psudo code
 training_steps: 1000000 # Taken from psudo code
 save_every: 500
-log_every: 10
+log_every: 1
 unroll_steps: 5 # Unroll for K=5 steps (see MuZero Appendix G)
 td_steps: 10 # Bootstrap 10 steps into the future (see MuZero Appendix G)
 weight_decay: 0.0001 # Taken from psudo code (L2 regularization)

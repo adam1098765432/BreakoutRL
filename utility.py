@@ -17,7 +17,7 @@ def scale_gradient(tensor: torch.Tensor, scale: float):
   tensor.register_hook(lambda grad: grad * scale)
   return tensor
 
-def get_temperature(num_moves, training_steps):
+def get_temperature(training_steps):
   if training_steps < 500_000:
     return 1.0
   elif training_steps < 750_000:
@@ -45,39 +45,56 @@ def one_hot_action(x: int):
   arr[0,x] = 1
   return arr
 
-def value_transform(x: float, eps=1e-3):
-  return np.sign(x) * (np.sqrt(np.abs(x) + 1) - 1) + eps * x
-
-def inverse_value_transform(x: float, eps=1e-3):
-  return np.sign(x) * (
-    ((np.sqrt(1 + 4 * eps * (np.abs(x) + 1 + eps)) - 1) / (2 * eps))**2 - 1
+def support_to_scalar(logits: torch.Tensor, support_size=SUPPORT_SIZE) -> float:
+  """
+  Taken from https://github.com/werner-duvaud/muzero-general
+  Transform a categorical representation to a scalar
+  See paper appendix Network Architecture
+  """
+  support_size = int(support_size)
+  # Decode to a scalar
+  probabilities = torch.softmax(logits, dim=1)
+  support = (
+    torch.tensor([x for x in range(-support_size, support_size + 1)])
+    .expand(probabilities.shape)
+    .float()
+    .to(device=probabilities.device)
   )
+  x = torch.sum(support * probabilities, dim=1, keepdim=True)
+
+  # Invert the scaling (defined in https://arxiv.org/abs/1805.11593)
+  x = torch.sign(x) * (
+    ((torch.sqrt(1 + 4 * 0.001 * (torch.abs(x) + 1 + 0.001)) - 1) / (2 * 0.001))
+    ** 2
+    - 1
+  )
+
+  x = x.cpu().detach().numpy()[0][0]
+
+  return x
 
 def scalar_to_support(x: float, support_size=SUPPORT_SIZE):
-  # x is already transformed
-  x = np.clip(x, -support_size//2, support_size//2)
+  """
+  Taken from https://github.com/werner-duvaud/muzero-general
+  Transform a scalar to a categorical representation with (2 * support_size + 1) categories
+  See paper appendix Network Architecture
+  """
+  support_size = int(support_size)
+  x = torch.tensor([x], device=device, dtype=torch.float32).unsqueeze(0)
 
-  floor = np.floor(x)
-  ceil = np.ceil(x)
+  # Reduce the scale (defined in https://arxiv.org/abs/1805.11593)
+  x = torch.sign(x) * (torch.sqrt(torch.abs(x) + 1) - 1) + 0.001 * x
 
-  prob_upper = x - floor
-  prob_lower = 1.0 - prob_upper
-
-  support = torch.zeros(size=(1, support_size), dtype=torch.float32, device=device)
-
-  idx_lower = int(floor + support_size // 2)
-  idx_upper = int(ceil + support_size // 2)
-
-  support[0, idx_lower] += prob_lower
-  support[0, idx_upper] += prob_upper
-
-  return support
-
-def support_to_scalar(probs: torch.Tensor, support_size=SUPPORT_SIZE):
-  support = torch.arange(
-    -(support_size // 2),
-    support_size // 2 + 1,
-    device=probs.device,
-    dtype=torch.float32
+  # Encode on a vector
+  x = torch.clamp(x, -support_size, support_size)
+  floor = x.floor()
+  prob = x - floor
+  logits = torch.zeros(x.shape[0], x.shape[1], 2 * support_size + 1).to(x.device)
+  logits.scatter_(
+    2, (floor + support_size).long().unsqueeze(-1), (1 - prob).unsqueeze(-1)
   )
-  return torch.dot(probs[0], support).item()
+  indexes = floor + support_size + 1
+  prob = prob.masked_fill_(2 * support_size < indexes, 0.0)
+  indexes = indexes.masked_fill_(2 * support_size < indexes, 0.0)
+  logits.scatter_(2, indexes.long().unsqueeze(-1), prob.unsqueeze(-1))
+  return logits

@@ -38,9 +38,9 @@ def train(replay_buffer: ReplayBuffer, bridge: Bridge, Env=Environment):
       Network.save(network, NETWORK_PATH)
       fetch_games(replay_buffer, bridge)
     batch = replay_buffer.sample_batch(UNROLL_STEPS, TD_STEPS)
-    update_weights(optimizer, network, batch)
+    update_weights(optimizer, network, batch, bridge)
 
-def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple]):
+def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple], bridge: Bridge):
   learning_rate = LR_INIT * LR_DECAY_RATE ** (network.training_steps / LR_DECAY_STEPS)
   optimizer.param_groups[0]['lr'] = learning_rate
   optimizer.zero_grad()
@@ -65,14 +65,14 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple])
       network_output = network.recurrent_forward_grad(network_output.hidden_state, action)
       network_output.hidden_state = scale_gradient(network_output.hidden_state, 0.5)
       predictions += [(
-        1 / len(actions),
+        1 / len(actions), # Scale gradient by number of unroll steps (actions)
         network_output.value,
         network_output.reward,
         network_output.policy_logits
       )]
 
     # Accumulate predictions and targets
-    for prediction, target in zip(predictions, targets):
+    for i, (prediction, target) in enumerate(zip(predictions, targets)):
       # Logits
       gradient_scale, pred_value_logits, pred_reward_logits, pred_policy_logits = prediction
       
@@ -85,8 +85,9 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple])
       pred_policy_log_probs = F.log_softmax(pred_policy_logits, dim=1)
 
       # Cross entropy loss with target probabilities
+      # Ignore reward loss for the first step
       raw_value_loss = -((pred_value_log_probs * target_value).sum(dim=1)).mean()
-      raw_reward_loss = -((pred_reward_log_probs * target_reward).sum(dim=1)).mean()
+      raw_reward_loss = torch.tensor(0.0).to(device) if i == 0 else -((pred_reward_log_probs * target_reward).sum(dim=1)).mean()
       raw_policy_loss = -((pred_policy_log_probs * target_policy).sum(dim=1)).mean()
       
       # Weight is to account for sampling bias
@@ -102,22 +103,27 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple])
       reward_loss += raw_reward_loss.item()
       policy_loss += raw_policy_loss.item()
 
-  # Backpropagate
-  n_losses = len(batch) * (1 + UNROLL_STEPS)
+  # Backpropagate (already scaling gradient by 1 / unroll steps so just mean over batch)
+  n_losses = len(batch)
   loss = loss / n_losses
   loss.backward()
   torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
   optimizer.step()
   network.training_steps += 1
 
-  # Log losses
-  if network.training_steps % LOG_EVERY == 0:
+  # Logs
+  if network.training_steps % LOG_EVERY == 0 and bridge.has_log():
+    logs = bridge.receive_log()
     sections = [
       f"Step: {network.training_steps:>6d}",
       f"Value Loss: {(value_loss / n_losses):.4f}",
       f"Reward Loss: {(reward_loss / n_losses):.4f}",
       f"Policy Loss: {(policy_loss / n_losses):.4f}"
     ]
+
+    for k, v in logs.items():
+      sections.append(f"{k}: {v}")
+
     print(" | ".join(sections))
 
 def fetch_games(replay_buffer: ReplayBuffer, bridge: Bridge, Env=Environment):

@@ -77,17 +77,16 @@ class MCTS:
       value_score = 0
     return prior_score + value_score
 
-  def select_action(self, node: Node, num_moves: int) -> int:
+  def select_action(self, node: Node) -> int:
     """
     Selects an action from the search tree.
     
     :param node: The node to select an action from
-    :param num_moves: The number of moves made so far
     :return: The action to take
     """
     actions = node.children.keys()
     visit_counts = [child.visit_count for child in node.children.values()]
-    temp = get_temperature(num_moves, self.network.training_steps)
+    temp = get_temperature(self.network.training_steps)
     action_idx = torch.multinomial(torch.tensor(visit_counts, device=device) ** (1 / temp), num_samples=1).item()
     return list(actions)[action_idx]
 

@@ -1,9 +1,11 @@
 from multiprocessing import freeze_support, set_start_method
 import os
 from typing import Callable
+from mcts import MCTS
 from muzero import muzero
+from networks import Network
 from replay_buffer import ReplayBuffer
-from self_play import Environment, Game
+from self_play import Environment, Game, get_root_node
 from config import *
 import numpy as np
 import pygame
@@ -215,7 +217,7 @@ def show(state: torch.Tensor):
 
   pygame.quit()
 
-def live(game: Game, get_action: Callable[[torch.Tensor], int]):
+def live(game: Game, get_action: Callable):
   screen_width, screen_height = 600, 700
   pygame.init()
   screen = pygame.display.set_mode((screen_width, screen_height))
@@ -234,7 +236,7 @@ def live(game: Game, get_action: Callable[[torch.Tensor], int]):
 
     # Update state
     if not game.terminal():
-      game.apply(action)
+      game.apply_action(action)
     else:
       game.reset()
 
@@ -264,13 +266,12 @@ def play_test_game():
   # network = Network()
   mcts = MCTS(network)
   game = Game(Env=Breakout)
-  game.states.append(game.get_current_state())
 
   def get_action():
     with torch.no_grad():
       root = get_root_node(mcts, game)
-      mcts.search(root, game.history.copy())
-      action = mcts.select_action(root, len(game.history))
+      mcts.search(root)
+      action = mcts.select_action(root)
       return action
 
   live(game, get_action)
