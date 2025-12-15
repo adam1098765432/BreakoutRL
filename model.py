@@ -22,7 +22,7 @@ LR_INIT = 0.05 # Taken from psudo code
 LR_DECAY_RATE = 0.1 # Taken from psudo code
 LR_DECAY_STEPS = 350_000 # Taken from psudo code
 TRAINING_STEPS = 1_000_000 # Taken from psudo code
-SAVE_EVERY = 5
+SAVE_EVERY = 1
 UNROLL_STEPS = 5 # Unroll for K=5 steps (see MuZero Appendix G)
 TD_STEPS = 10 # Bootstrap 10 steps into the future (see MuZero Appendix G)
 WEIGHT_DECAY = 0.0001 # Taken from psudo code (L2 regularization)
@@ -95,6 +95,14 @@ class PredictionModel(nn.Module):
     self.policy = nn.Linear(HIDDEN_SIZE, ACTION_SIZE) # The move to play
     self.value = nn.Linear(HIDDEN_SIZE, SUPPORT_SIZE) # Expected final reward
 
+    # Zero initialize value head
+    nn.init.zeros_(self.value.weight)
+    nn.init.zeros_(self.value.bias)
+
+    # Initialize policy head with scaled normal
+    nn.init.normal_(self.policy.weight, mean=0, std=0.01)
+    nn.init.normal_(self.policy.bias, mean=0, std=0.01)
+
   def forward(self, state):
     x = F.relu(self.fc1(state))
     x = F.relu(self.fc2(x))
@@ -143,14 +151,20 @@ class DynamicsModel(nn.Module):
   """
   def __init__(self, n_blocks=2):
     super().__init__()
-    self.first = nn.Linear(HIDDEN_SIZE + ACTION_SIZE, HIDDEN_SIZE)
-    self.model = nn.Sequential(*[ResBlock(HIDDEN_SIZE) for _ in range(n_blocks)])
-    self.state = nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE)
-    self.reward = nn.Linear(HIDDEN_SIZE, SUPPORT_SIZE)
+    self.model = nn.Sequential(*[ResBlock(HIDDEN_SIZE + ACTION_SIZE) for _ in range(n_blocks)])
+    self.state = nn.Linear(HIDDEN_SIZE + ACTION_SIZE, HIDDEN_SIZE)
+    self.reward = nn.Linear(HIDDEN_SIZE + ACTION_SIZE, SUPPORT_SIZE)
+
+    # Initialize reward head with zeros
+    nn.init.zeros_(self.reward.weight)
+    nn.init.zeros_(self.reward.bias)
+
+    # Initialize state head with scaled normal
+    nn.init.normal_(self.state.weight, mean=0, std=0.01)
+    nn.init.normal_(self.state.bias, mean=0, std=0.01)
 
   def forward(self, state, action):
     x = torch.cat([state, action], dim=1)
-    x = F.relu(self.first(x))
     x = self.model(x)
     state = F.relu(self.state(x))
     reward = self.reward(x)
@@ -173,6 +187,9 @@ class NetworkOutput:
     self.reward = reward
     self.policy_logits = policy_logits
     self.value = value
+
+  def __str__(self):
+    return f"NetworkOutput(hidden_state={self.hidden_state}, reward={self.reward}, policy_logits={self.policy_logits}, value={self.value})"
 
 class Network(nn.Module):
   def __init__(self):
@@ -243,24 +260,28 @@ class UniformNetwork(Network):
     super().__init__()
 
   def initial_forward(self, state):
+    hidden_state = torch.ones(1, HIDDEN_SIZE)
     policy_logits = torch.ones(1, ACTION_SIZE)
-    return NetworkOutput(state, 0, policy_logits, 0)
+    return NetworkOutput(hidden_state, 0, policy_logits, 0)
   
   def initial_forward_grad(self, state):
+    hidden_state = torch.ones(1, HIDDEN_SIZE)
     policy_logits = torch.ones(1, ACTION_SIZE)
     reward = scalar_to_support(value_transform(0))
     value = scalar_to_support(value_transform(0))
-    return NetworkOutput(state, reward, policy_logits, value)
+    return NetworkOutput(hidden_state, reward, policy_logits, value)
 
   def recurrent_forward(self, state: torch.Tensor, action: int):
+    hidden_state = torch.ones(1, HIDDEN_SIZE)
     policy_logits = torch.ones(1, ACTION_SIZE)
-    return NetworkOutput(state, 0, policy_logits, 0)
+    return NetworkOutput(hidden_state, 0, policy_logits, 0)
   
   def recurrent_forward_grad(self, state: torch.Tensor, action: int):
+    hidden_state = torch.ones(1, HIDDEN_SIZE)
     policy_logits = torch.ones(1, ACTION_SIZE)
     reward = scalar_to_support(value_transform(0))
     value = scalar_to_support(value_transform(0))
-    return NetworkOutput(state, reward, policy_logits, value)
+    return NetworkOutput(hidden_state, reward, policy_logits, value)
 
 """ MCTS """
 
@@ -286,8 +307,7 @@ class Node:
   """
   def __init__(self, prior: float):
     self.visit_count = 0
-    self.to_play = -1
-    self.prior = prior # Probability of picking an action from this node
+    self.prior = prior # Probability of picking this action
     self.value_sum = 0 # Mean value
     self.children: dict[int, Node] = {}
     self.hidden_state = None
@@ -300,6 +320,16 @@ class Node:
     if self.visit_count == 0:
       return 0
     return self.value_sum / self.visit_count
+  
+  def __str__(self):
+    return f"Node(\n\
+      visit_count={self.visit_count},\n\
+      prior={self.prior},\n\
+      value_sum={self.value_sum},\n\
+      expanded={self.expanded()},\n\
+      hidden_state={self.hidden_state},\n\
+      reward={self.reward}\n\
+    )"
 
 class MCTS:
   """
@@ -327,15 +357,9 @@ class MCTS:
     return list(actions)[action_idx]
 
   def select_child(self, node: Node, min_max_stats: MinMaxStats):
-    scores = [(
-      ucb_score(node, child, min_max_stats),
-      action,
-      child
-    ) for action, child in node.children.items()]
-
+    scores = [(action, child, ucb_score(node, child, min_max_stats)) for action, child in node.children.items()]
     random.shuffle(scores) # Randomly break ties (stops from constantly picking the last action)
-    _, action, child = max(scores)
-
+    action, child, _ = max(scores, key=lambda x: x[2])
     return action, child
 
   def search(self, root: Node, action_history: list[int]):
@@ -348,14 +372,11 @@ class MCTS:
 
       while node.expanded():
         action, node = self.select_child(node, min_max_stats)
-        # if i == 0: print(node.prior)
         history.append(action)
         search_path.append(node)
 
       parent = search_path[-2]
       network_output = self.network.recurrent_forward(parent.hidden_state, action)
-
-      # print(network_output.policy_logits)
 
       self.expand_node(node, network_output)
       self.backprop(search_path, network_output, min_max_stats)
@@ -635,7 +656,7 @@ def get_root_node(mcts: MCTS, game: Game):
   """
   Get the root node as the current state of the game.
   """
-  root = Node(0)
+  root = Node(1.0 / ACTION_SIZE)
   current_state = game.get_current_state()
   network_output = mcts.network.initial_forward(current_state)
   mcts.expand_node(root, network_output)
@@ -677,7 +698,7 @@ def fetch_network(actor_id: int, network_buffer: NetworkBuffer, bridge: Bridge):
   if bridge.has_network(actor_id):
     network = bridge.receive_network(actor_id)
     network_buffer.save_network(network)
-    print(f"Actor {actor_id}: Received latest network")
+    # print(f"Actor {actor_id}: Received latest network")
 
 """ Training """
 
@@ -710,7 +731,6 @@ def train(replay_buffer: ReplayBuffer, bridge: Bridge):
   while len(replay_buffer.buffer) < 1:
     attempts += 1
     fetch_games(replay_buffer, bridge)
-    print("Waiting for a game to complete, attempt", attempts)
     time.sleep(5)
 
   print("Training...")
@@ -726,10 +746,11 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple])
   learning_rate = LR_INIT * LR_DECAY_RATE ** (network.training_steps / LR_DECAY_STEPS)
   optimizer.param_groups[0]['lr'] = learning_rate
   optimizer.zero_grad()
-  loss = 0
-  prog_bar = tqdm(batch, desc=f"Training step {network.training_steps}")
+  value_loss = 0
+  reward_loss = 0
+  policy_loss = 0
 
-  for game_state, actions, targets, weight in prog_bar:
+  for game_state, actions, targets, weight in batch:
     
     # Initial step
     network_output = network.initial_forward_grad(game_state)
@@ -765,23 +786,31 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple])
       pred_policy_log_probs = F.log_softmax(pred_policy_logits, dim=1)
 
       # Cross entropy loss with target probabilities
-      raw_loss = -(
-        (pred_value_log_probs * target_value).sum(dim=1) +
-        (pred_reward_log_probs * target_reward).sum(dim=1) +
-        (pred_policy_log_probs * target_policy).sum(dim=1)
-      ).mean()
-
+      raw_value_loss = -((pred_value_log_probs * target_value).sum(dim=1)).mean()
+      raw_reward_loss = -((pred_reward_log_probs * target_reward).sum(dim=1)).mean()
+      raw_policy_loss = -((pred_policy_log_probs * target_policy).sum(dim=1)).mean()
+      
       # Weight is to account for sampling bias
-      loss += weight * scale_gradient(raw_loss, gradient_scale)
+      loss += weight * scale_gradient(raw_value_loss + raw_reward_loss + raw_policy_loss, gradient_scale)
+
+      # Collect losses
+      value_loss += raw_value_loss.item()
+      reward_loss += raw_reward_loss.item()
+      policy_loss += raw_policy_loss.item()
 
   # Backpropagate
   n_losses = len(batch) * (1 + UNROLL_STEPS)
   loss = loss / n_losses
-  print(f"Loss: {loss}")
   loss.backward()
   torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
   optimizer.step()
   network.training_steps += 1
+
+  # Log losses
+  print(f"Step: {network.training_steps} | \
+        Value Loss: {value_loss / n_losses} | \
+        Reward Loss: {reward_loss / n_losses} | \
+        Policy Loss: {policy_loss / n_losses}")
 
 def fetch_games(replay_buffer: ReplayBuffer, bridge: Bridge):
   games_received = 0
@@ -789,7 +818,7 @@ def fetch_games(replay_buffer: ReplayBuffer, bridge: Bridge):
     game = bridge.receive_game()
     replay_buffer.add_game(game)
     games_received += 1
-  print(f"Received {games_received} games")
+  # print(f"Received {games_received} games")
 
 def freeze_value_and_reward(network: Network):
   # Freeze value head
