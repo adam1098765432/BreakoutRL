@@ -1,7 +1,7 @@
 import numpy as np
 from config import *
 from utility import *
-from self_play import Game, Observation
+from game import Game, Observation
 
 
 class ReplayBuffer:

@@ -15,6 +15,6 @@ def muzero(replay_buffer: ReplayBuffer, Env: Environment):
   device = get_device()
   print(f"Main process using device: {device}")
 
-  train(replay_buffer, bridge)
+  train(replay_buffer, bridge, Env)
 
 

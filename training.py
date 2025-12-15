@@ -1,11 +1,12 @@
 from bridge import Bridge
+from game import Environment
 from networks import Network
 from replay_buffer import ReplayBuffer
 import time
 from utility import *
 import torch.nn.functional as F
 
-def train(replay_buffer: ReplayBuffer, bridge: Bridge):
+def train(replay_buffer: ReplayBuffer, bridge: Bridge, Env=Environment):
   """
   Training loop.
   
@@ -26,7 +27,7 @@ def train(replay_buffer: ReplayBuffer, bridge: Bridge):
   attempts = 0
   while len(replay_buffer.buffer) < 1:
     attempts += 1
-    fetch_games(replay_buffer, bridge)
+    fetch_games(replay_buffer, bridge, Env)
     time.sleep(5)
 
   print("Training...")
@@ -119,10 +120,10 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple])
     ]
     print(" | ".join(sections))
 
-def fetch_games(replay_buffer: ReplayBuffer, bridge: Bridge):
+def fetch_games(replay_buffer: ReplayBuffer, bridge: Bridge, Env=Environment):
   games_received = 0
   while bridge.has_game():
-    game = bridge.receive_game()
+    game = bridge.receive_game(Env)
     replay_buffer.add_game(game)
     games_received += 1
   # print(f"Received {games_received} games")

@@ -2,6 +2,7 @@ from multiprocessing import Queue
 import os
 from config import *
 from networks import Network, UniformNetwork
+from game import Game
 
 class Bridge:
   def __init__(self, max_games=1000, num_actors=NUM_ACTORS):
@@ -9,11 +10,11 @@ class Bridge:
     self.game_queue = Queue(maxsize=max_games)
     self.weight_queue = [Queue(maxsize=1) for _ in range(num_actors)]
 
-  def send_game(self, game):
-    self.game_queue.put(game)
+  def send_game(self, game: Game):
+    self.game_queue.put(Game.serealize(game))
 
-  def receive_game(self):
-    return self.game_queue.get()
+  def receive_game(self, Env):
+    return Game.deserialize(self.game_queue.get(), Env)
 
   def has_game(self):
     return not self.game_queue.empty()
@@ -21,7 +22,7 @@ class Bridge:
   def has_network(self, actor_id):
     return not self.weight_queue[actor_id].empty()
 
-  def broadcast_network(self, network):
+  def broadcast_network(self, network: Network):
     # Move to cpu before sending to actors
     state_dict = network.state_dict()
     for k in state_dict.keys():
