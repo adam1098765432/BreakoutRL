@@ -9,6 +9,10 @@ import torch.nn.functional as F
 import random
 import yaml
 
+# Set device
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
+
 # Load yaml config
 with open("config.yaml", "r") as f:
   config = yaml.safe_load(f)
@@ -68,7 +72,7 @@ class Bridge:
 
   def receive_network(self, actor_id):
     if not self.weight_queue[actor_id].empty():
-      network = Network()
+      network = Network().to(device)
       network.load_state_dict(self.weight_queue[actor_id].get())
       return network
     return UniformNetwork()
@@ -250,7 +254,7 @@ class Network(nn.Module):
   def load(path: str):
     try:
       checkpoint = torch.load(path)
-      network = Network()
+      network = Network().to(device)
       network.load_state_dict(checkpoint['model'])
       network.training_steps = checkpoint['steps']
       print(f"Loaded model from {path}")
@@ -265,25 +269,25 @@ class UniformNetwork(Network):
     super().__init__()
 
   def initial_forward(self, state):
-    hidden_state = torch.ones(1, HIDDEN_SIZE)
-    policy_logits = torch.ones(1, ACTION_SIZE)
+    hidden_state = torch.ones(1, HIDDEN_SIZE, device=device)
+    policy_logits = torch.ones(1, ACTION_SIZE, device=device)
     return NetworkOutput(hidden_state, 0, policy_logits, 0)
   
   def initial_forward_grad(self, state):
-    hidden_state = torch.ones(1, HIDDEN_SIZE)
-    policy_logits = torch.ones(1, ACTION_SIZE)
+    hidden_state = torch.ones(1, HIDDEN_SIZE, device=device)
+    policy_logits = torch.ones(1, ACTION_SIZE, device=device)
     reward = scalar_to_support(value_transform(0))
     value = scalar_to_support(value_transform(0))
     return NetworkOutput(hidden_state, reward, policy_logits, value)
 
   def recurrent_forward(self, state: torch.Tensor, action: int):
-    hidden_state = torch.ones(1, HIDDEN_SIZE)
-    policy_logits = torch.ones(1, ACTION_SIZE)
+    hidden_state = torch.ones(1, HIDDEN_SIZE, device=device)
+    policy_logits = torch.ones(1, ACTION_SIZE, device=device)
     return NetworkOutput(hidden_state, 0, policy_logits, 0)
   
   def recurrent_forward_grad(self, state: torch.Tensor, action: int):
-    hidden_state = torch.ones(1, HIDDEN_SIZE)
-    policy_logits = torch.ones(1, ACTION_SIZE)
+    hidden_state = torch.ones(1, HIDDEN_SIZE, device=device)
+    policy_logits = torch.ones(1, ACTION_SIZE, device=device)
     reward = scalar_to_support(value_transform(0))
     value = scalar_to_support(value_transform(0))
     return NetworkOutput(hidden_state, reward, policy_logits, value)
@@ -349,7 +353,7 @@ class MCTS:
 
   def select_action(self, node: Node, num_moves: int) -> int:
     """
-    Docstring for select_action
+    Selects an action from the search tree.
     
     :param node: The node to select an action from
     :param num_moves: The number of moves made so far
@@ -358,7 +362,7 @@ class MCTS:
     actions = node.children.keys()
     visit_counts = [child.visit_count for child in node.children.values()]
     temp = get_temperature(num_moves, self.network.training_steps)
-    action_idx = torch.multinomial(torch.tensor(visit_counts) ** (1 / temp), num_samples=1).item()
+    action_idx = torch.multinomial(torch.tensor(visit_counts, device=device) ** (1 / temp), num_samples=1).item()
     return list(actions)[action_idx]
 
   def select_child(self, node: Node, min_max_stats: MinMaxStats):
@@ -427,8 +431,9 @@ class NetworkBuffer:
     self.network = network
 
 class Environment:
-  def __init__(self):
-    self.state = torch.zeros(size=(1, STATE_SIZE))
+  def __init__(self, device):
+    self.device = device
+    self.state = torch.zeros(size=(1, STATE_SIZE), device=device)
 
   def step(self, action: int):
     """
@@ -437,7 +442,7 @@ class Environment:
     :param action: The action
     :return: The state and reward
     """
-    state = torch.zeros(size=(1, STATE_SIZE))
+    state = torch.zeros(size=(1, STATE_SIZE), device=self.device)
     reward = 0.0
     return state, reward
 
@@ -456,7 +461,7 @@ class Game:
     self.Env = Env
     self.action_space_size = action_space_size
     self.discount_factor = discount_factor
-    self.environment = Env()
+    self.environment = Env(device)
     self.history = []
     self.rewards = []
     self.child_visits = []
@@ -465,7 +470,7 @@ class Game:
     self.priorities = []
 
   def reset(self):
-    self.environment = self.Env()
+    self.environment = self.Env(device)
     self.history = []
     self.rewards = []
     self.child_visits = []
@@ -544,14 +549,14 @@ class Game:
         targets.append((
           scalar_to_support(value_transform(value)),
           scalar_to_support(value_transform(last_reward)),
-          torch.tensor(policy).unsqueeze(0)
+          torch.tensor(policy, device=device).unsqueeze(0)
         ))
       else:
         # States past the end of games are absorbing states
         targets.append((
           scalar_to_support(value_transform(0.0)),
           scalar_to_support(value_transform(last_reward)),
-          torch.ones(size=(1, self.action_space_size)) / self.action_space_size
+          torch.ones(size=(1, self.action_space_size), device=device) / self.action_space_size
         ))
 
     return targets
@@ -724,6 +729,7 @@ def train(replay_buffer: ReplayBuffer, bridge: Bridge):
   regardless of the number of unroll steps.
   """
   network = Network.load(NETWORK_PATH)
+  network = network.to(device)
   # freeze_value_and_reward(network)
   optimizer = torch.optim.AdamW(
     filter(lambda p: p.requires_grad, network.parameters()),
@@ -757,7 +763,7 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple])
   loss = 0
 
   for game_state, actions, targets, weight in batch:
-    
+
     # Initial step
     network_output = network.initial_forward_grad(game_state)
     predictions = [(
@@ -876,7 +882,7 @@ def one_hot_action(x: int):
 
   :param x: The action index
   """
-  arr = torch.zeros(size=(1, ACTION_SIZE))
+  arr = torch.zeros(size=(1, ACTION_SIZE), device=device)
   arr[0,x] = 1
   return arr
 
@@ -915,7 +921,7 @@ def scalar_to_support(x: float, support_size=SUPPORT_SIZE):
   prob_upper = x - floor
   prob_lower = 1.0 - prob_upper
 
-  support = torch.zeros(size=(1, support_size), dtype=torch.float32)
+  support = torch.zeros(size=(1, support_size), dtype=torch.float32, device=device)
 
   idx_lower = int(floor + support_size // 2)
   idx_upper = int(ceil + support_size // 2)

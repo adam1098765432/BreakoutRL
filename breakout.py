@@ -42,8 +42,8 @@ class IDX:
   BRICK_END = 5 + BRICK_ROWS * BRICK_COLUMNS
 
 class Breakout(Environment):
-  def __init__(self):
-    super().__init__()
+  def __init__(self, device):
+    super().__init__(device)
 
     # Initialize state
     self.state[0, IDX.PADDLE_X] = 0.5
