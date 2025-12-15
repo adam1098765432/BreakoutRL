@@ -437,7 +437,7 @@ class NetworkBuffer:
 
   def load_network(self):
     if os.path.exists(NETWORK_PATH):
-      return torch.load(NETWORK_PATH)
+      return Network.load(NETWORK_PATH)
     else:
       return UniformNetwork()
 
