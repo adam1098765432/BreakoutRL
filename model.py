@@ -20,14 +20,14 @@ N_SIMULATIONS = 50
 MAX_MOVES = 27000 # Taken from psudo code
 LR_INIT = 0.05 # Taken from psudo code
 LR_DECAY_RATE = 0.1 # Taken from psudo code
-LR_DECAY_STEPS = 350_000 # Taken from psudo code
+LR_DECAY_STEPS = 10_000 # Taken from psudo code
 TRAINING_STEPS = 1_000_000 # Taken from psudo code
 SAVE_EVERY = 1
 UNROLL_STEPS = 5 # Unroll for K=5 steps (see MuZero Appendix G)
 TD_STEPS = 10 # Bootstrap 10 steps into the future (see MuZero Appendix G)
 WEIGHT_DECAY = 0.0001 # Taken from psudo code (L2 regularization)
-BATCH_SIZE = 32
-NUM_ACTORS = 1
+BATCH_SIZE = 64
+NUM_ACTORS = 2
 DIRICHLET_ALPHA = 0.25
 DIRICHLET_FRAC = 0.25
 
@@ -749,6 +749,7 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple])
   value_loss = 0
   reward_loss = 0
   policy_loss = 0
+  loss = 0
 
   for game_state, actions, targets, weight in batch:
     
@@ -807,10 +808,13 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple])
   network.training_steps += 1
 
   # Log losses
-  print(f"Step: {network.training_steps} | \
-        Value Loss: {value_loss / n_losses} | \
-        Reward Loss: {reward_loss / n_losses} | \
-        Policy Loss: {policy_loss / n_losses}")
+  sections = [
+    f"Step: {network.training_steps:>6d}",
+    f"Value Loss: {(value_loss / n_losses):.4f}",
+    f"Reward Loss: {(reward_loss / n_losses):.4f}",
+    f"Policy Loss: {(policy_loss / n_losses):.4f}"
+  ]
+  print(" | ".join(sections))
 
 def fetch_games(replay_buffer: ReplayBuffer, bridge: Bridge):
   games_received = 0
