@@ -433,8 +433,13 @@ class MCTS:
 
 class NetworkBuffer:
   def __init__(self):
-    self.network = UniformNetwork()
-    # self.network = Network()
+    self.network = self.load_network()
+
+  def load_network(self):
+    if os.path.exists(NETWORK_PATH):
+      return torch.load(NETWORK_PATH)
+    else:
+      return UniformNetwork()
 
   def latest_network(self):
     return self.network
@@ -644,7 +649,7 @@ class ReplayBuffer:
     batch = []
 
     for (game, state_idx) in game_pos:
-      state = game.states[state_idx]
+      state = game.states[state_idx].to(device)
       actions = game.history[state_idx:state_idx + unroll_steps]
       targets = game.get_targets(state_idx, unroll_steps, td_steps)
       weight = sum(game.priorities) / len(game.priorities) / game.priorities[state_idx]

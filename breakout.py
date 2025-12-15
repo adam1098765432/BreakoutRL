@@ -283,7 +283,7 @@ def play_test_game():
   live(game, get_action)
 
 def train_breakout():
-  replay_buffer = ReplayBuffer(100, BATCH_SIZE)
+  replay_buffer = ReplayBuffer(1000, BATCH_SIZE)
   muzero(replay_buffer, Breakout)
 
 if __name__ == "__main__":
