@@ -46,6 +46,7 @@ BATCH_SIZE = config["batch_size"]
 NUM_ACTORS = config["num_actors"]
 DIRICHLET_ALPHA = config["dirichlet_alpha"]
 DIRICHLET_FRAC = config["dirichlet_frac"]
+ACTORS_USE_CUDA = config["actors_use_cuda"]
 
 """ Threading """
 
@@ -685,7 +686,7 @@ def get_root_node(mcts: MCTS, game: Game):
 
 def run_selfplay(actor_id: int, bridge: Bridge, iterations: int, Env: Environment):
   global device
-  device = get_device()
+  device = get_device() if ACTORS_USE_CUDA else torch.device("cpu")
   print(f"Actor {actor_id} using device: {device}")
   
   torch.set_num_threads(1)
@@ -699,7 +700,7 @@ def run_selfplay(actor_id: int, bridge: Bridge, iterations: int, Env: Environmen
     game.compute_priorities(TD_STEPS)
     bridge.send_game(game)
     # print(f"Game completed in {len(game.history)} moves")
-    
+
 def play_game(mcts: MCTS, Env: Environment):
   game = Game(Env=Env)
   game.states.append(game.get_current_state())
