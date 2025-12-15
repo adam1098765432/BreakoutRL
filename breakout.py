@@ -1,23 +1,16 @@
-import enum
-from multiprocessing import freeze_support
+from multiprocessing import freeze_support, set_start_method
+import os
 from typing import Callable
+from muzero import muzero
+from replay_buffer import ReplayBuffer
+from self_play import Environment, Game
+from config import *
 import numpy as np
 import pygame
 import torch
 import sys
-from model import (
-  Environment,
-  Game,
-  MCTS,
-  Network,
-  NetworkBuffer,
-  ReplayBuffer,
-  UniformNetwork,
-  get_root_node,
-  muzero,
-  BATCH_SIZE,
-  NETWORK_PATH
-)
+
+os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
 
 # Game parameters
 BRICK_ROWS = 7
@@ -288,6 +281,12 @@ def train_breakout():
 
 if __name__ == "__main__":
   freeze_support()
+
+  try:
+    set_start_method('spawn', force=True)
+  except RuntimeError:
+    pass
+
   if '--test' in sys.argv:
     play_test_game()
   else:

@@ -1,17 +1,37 @@
-WIDTH, HEIGHT = 600, 700
+import torch
+import yaml
 
-PADDLE_WIDTH, PADDLE_HEIGHT = 100, 15
-PADDLE_Y = HEIGHT - 40
-PADDLE_SPEED = 8.0
+def get_device():
+  return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-BALL_RADIUS = 8
+device = torch.device("cpu")
 
-BRICK_ROWS = 7
-BRICK_COLUMNS = 10
-N_BRICKS = BRICK_ROWS * BRICK_COLUMNS
-BRICK_WIDTH = WIDTH // BRICK_COLUMNS
-BRICK_HEIGHT = 20
-BRICK_TOP = 100
+# Load yaml config
+with open("config.yaml", "r") as f:
+  config = yaml.safe_load(f)
 
-BALL_SPEED_X = 5.0
-BALL_SPEED_Y = -5.0
+# Training parameters
+NETWORK_PATH: str = config["network_path"]
+MAX_FLOAT = float('inf')
+STATE_SIZE: int = config["state_size"]
+ACTION_SIZE: int = config["action_size"]
+SUPPORT_SIZE: int = config["support_size"]
+HIDDEN_SIZE: int = config["hidden_size"]
+DISCOUNT_FACTOR: float = config["discount_factor"]
+N_SIMULATIONS: int = config["n_simulations"]
+MAX_MOVES: int = config["max_moves"]
+LR_INIT: float = config["lr_init"]
+LR_DECAY_RATE: float = config["lr_decay_rate"]
+LR_DECAY_STEPS: int = config["lr_decay_steps"]
+TRAINING_STEPS: int = config["training_steps"]
+SAVE_EVERY: int = config["save_every"]
+LOG_EVERY: int = config["log_every"]
+UNROLL_STEPS: int = config["unroll_steps"]
+TD_STEPS: int = config["td_steps"]
+WEIGHT_DECAY: float = config["weight_decay"]
+BATCH_SIZE: int = config["batch_size"]
+NUM_ACTORS: int = config["num_actors"]
+DIRICHLET_ALPHA: float = config["dirichlet_alpha"]
+DIRICHLET_FRAC: float = config["dirichlet_frac"]
+ACTORS_USE_CUDA: bool = config["actors_use_cuda"]
+VALUE_LOSS_WEIGHT: float = config["value_loss_weight"]
