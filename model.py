@@ -17,8 +17,7 @@ except RuntimeError:
 def get_device():
   return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-device = get_device()
-print(f"Main process using device: {device}")
+device = torch.device("cpu")
 
 # Load yaml config
 with open("config.yaml", "r") as f:
@@ -740,6 +739,10 @@ def muzero(replay_buffer: ReplayBuffer, Env: Environment):
 
   for actor_id in range(NUM_ACTORS):
     launch_job(run_selfplay, actor_id, bridge, TRAINING_STEPS // NUM_ACTORS, Env)
+
+  global device
+  device = get_device()
+  print(f"Main process using device: {device}")
 
   train(replay_buffer, bridge)
 
