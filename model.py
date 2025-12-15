@@ -68,7 +68,11 @@ class Bridge:
     return not self.weight_queue[actor_id].empty()
 
   def broadcast_network(self, network):
+    # Move to cpu before sending to actors
     state_dict = network.state_dict()
+    for k in state_dict.keys():
+      state_dict[k] = state_dict[k].cpu()
+
     # Send new weights to all actors
     for actor_id in range(self.num_actors):
       # Drop old weights, keep only newest
