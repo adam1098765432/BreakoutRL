@@ -93,7 +93,7 @@ class Breakout(Environment):
     elif state[0, IDX.BALL_Y] > 1 - BALL_RADIUS:
       state[0, IDX.BALL_Y] = 1 - BALL_RADIUS
       state[0, IDX.BALL_VY] = -state[0, IDX.BALL_VY]
-      ball_to_paddle = abs(state[0, IDX.BALL_Y].item() - PADDLE_Y)
+      ball_to_paddle = abs(state[0, IDX.BALL_X].item() - state[0, IDX.PADDLE_X].item())
       reward -= 1 * ball_to_paddle
       self.is_done = True
 
