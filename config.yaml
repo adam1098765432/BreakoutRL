@@ -10,12 +10,12 @@ lr_init: 0.05 # Taken from psudo code
 lr_decay_rate: 0.1 # Taken from psudo code
 lr_decay_steps: 10000 # Taken from psudo code
 training_steps: 1000000 # Taken from psudo code
-save_every: 1
+save_every: 5
 unroll_steps: 5 # Unroll for K=5 steps (see MuZero Appendix G)
 td_steps: 10 # Bootstrap 10 steps into the future (see MuZero Appendix G)
 weight_decay: 0.0001 # Taken from psudo code (L2 regularization)
 batch_size: 32
-num_actors: 2
+num_actors: 4
 dirichlet_alpha: 0.25
 dirichlet_frac: 0.25
 actors_use_cuda: False

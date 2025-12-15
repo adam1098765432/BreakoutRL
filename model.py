@@ -694,7 +694,7 @@ def run_selfplay(actor_id: int, bridge: Bridge, iterations: int, Env: Environmen
   device = get_device() if ACTORS_USE_CUDA else torch.device("cpu")
   print(f"Actor {actor_id} using device: {device}")
   
-  torch.set_num_threads(1)
+  if device.type == "cuda": torch.set_num_threads(1)
 
   iterations = int(iterations)
   network_buffer = NetworkBuffer()
@@ -769,10 +769,10 @@ def train(replay_buffer: ReplayBuffer, bridge: Bridge):
 
   print("Training...")
   for i in range(int(TRAINING_STEPS)):
-    fetch_games(replay_buffer, bridge)
     if (i + 1) % SAVE_EVERY == 0:
       bridge.broadcast_network(network)
       Network.save(network, NETWORK_PATH)
+      fetch_games(replay_buffer, bridge)
     batch = replay_buffer.sample_batch(UNROLL_STEPS, TD_STEPS)
     update_weights(optimizer, network, batch)
 
