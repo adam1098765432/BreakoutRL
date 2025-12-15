@@ -1,4 +1,4 @@
-from multiprocessing import Process, Queue
+from multiprocessing import Process, Queue, set_start_method
 from tqdm import tqdm
 import os
 import time
@@ -9,9 +9,16 @@ import torch.nn.functional as F
 import random
 import yaml
 
-# Set device
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
+try:
+  set_start_method('spawn', force=True)
+except RuntimeError:
+  pass
+
+def get_device():
+  return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+device = get_device()
+print(f"Main process using device: {device}")
 
 # Load yaml config
 with open("config.yaml", "r") as f:
@@ -673,6 +680,12 @@ def get_root_node(mcts: MCTS, game: Game):
   return root
 
 def run_selfplay(actor_id: int, bridge: Bridge, iterations: int, Env: Environment):
+  global device
+  device = get_device()
+  print(f"Actor {actor_id} using device: {device}")
+  
+  torch.set_num_threads(1)
+
   iterations = int(iterations)
   network_buffer = NetworkBuffer()
   print(f"Playing {iterations} games...")
