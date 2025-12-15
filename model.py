@@ -7,29 +7,34 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import random
+import yaml
+
+# Load yaml config
+with open("config.yaml", "r") as f:
+  config = yaml.safe_load(f)
 
 # Training parameters
-NETWORK_PATH = "Models/network.pt"
+NETWORK_PATH = config["network_path"]
 MAX_FLOAT = float('inf')
-STATE_SIZE = 76
-ACTION_SIZE = 3
-SUPPORT_SIZE = 601 # Categorical reward and value [-300, 300] (see Appendix F of MuZero paper)
-HIDDEN_SIZE = 128
-DISCOUNT_FACTOR = 0.997
-N_SIMULATIONS = 50
-MAX_MOVES = 27000 # Taken from psudo code
-LR_INIT = 0.05 # Taken from psudo code
-LR_DECAY_RATE = 0.1 # Taken from psudo code
-LR_DECAY_STEPS = 10_000 # Taken from psudo code
-TRAINING_STEPS = 1_000_000 # Taken from psudo code
-SAVE_EVERY = 1
-UNROLL_STEPS = 5 # Unroll for K=5 steps (see MuZero Appendix G)
-TD_STEPS = 10 # Bootstrap 10 steps into the future (see MuZero Appendix G)
-WEIGHT_DECAY = 0.0001 # Taken from psudo code (L2 regularization)
-BATCH_SIZE = 64
-NUM_ACTORS = 2
-DIRICHLET_ALPHA = 0.25
-DIRICHLET_FRAC = 0.25
+STATE_SIZE = config["state_size"]
+ACTION_SIZE = config["action_size"]
+SUPPORT_SIZE = config["support_size"]
+HIDDEN_SIZE = config["hidden_size"]
+DISCOUNT_FACTOR = config["discount_factor"]
+N_SIMULATIONS = config["n_simulations"]
+MAX_MOVES = config["max_moves"]
+LR_INIT = config["lr_init"]
+LR_DECAY_RATE = config["lr_decay_rate"]
+LR_DECAY_STEPS = config["lr_decay_steps"]
+TRAINING_STEPS = config["training_steps"]
+SAVE_EVERY = config["save_every"]
+UNROLL_STEPS = config["unroll_steps"]
+TD_STEPS = config["td_steps"]
+WEIGHT_DECAY = config["weight_decay"]
+BATCH_SIZE = config["batch_size"]
+NUM_ACTORS = config["num_actors"]
+DIRICHLET_ALPHA = config["dirichlet_alpha"]
+DIRICHLET_FRAC = config["dirichlet_frac"]
 
 """ Threading """
 
