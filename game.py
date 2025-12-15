@@ -6,6 +6,7 @@ class Environment:
   def __init__(self, device):
     self.device = device
     self.state = torch.zeros(size=(1, STATE_SIZE), device=device)
+    self.reward = 0
 
   def step(self, action: int):
     """
@@ -20,6 +21,9 @@ class Environment:
 
   def get_state(self):
     return self.state
+
+  def get_reward(self):
+    return self.reward
 
   def terminal(self):
     return False
@@ -70,7 +74,12 @@ class Game:
     self.environment = Env(device)
     self.priority = None
     self.priorities = []
-    self.observations: list[Observation] = []
+    # self.observations: list[Observation] = []
+    self.states = []
+    self.actions = []
+    self.rewards = []
+    self.values = []
+    self.priors = []
 
   def reset(self):
     self.environment = self.Env(device)
@@ -85,7 +94,8 @@ class Game:
     return [i for i in range(ACTION_SIZE)]
   
   def apply_action(self, action: int):
-    self.environment.step(action)
+    state, reward = self.environment.step(action)
+    return state, reward
 
   def apply(self, action: int, root: Node):
     state, reward = self.environment.step(action)
@@ -96,46 +106,45 @@ class Game:
       for i in range(ACTION_SIZE)
     ]
 
-    observation = Observation(
-      state,
-      action,
-      reward,
-      child_visit_priors,
-      mcts_value
-    )
+    self.states += [state] # State of the next observation
+    self.rewards += [reward] # Reward of the next observation
 
-    self.observations.append(observation)
+    self.actions += [action] # Action for the current state
+    self.values += [mcts_value] # MCTS value for the current state
+    self.priors += [child_visit_priors] # Child visit proportions for the current state
 
   def get_current_state(self):
     return self.environment.get_state()
 
   ### Observation Helpers ###
 
-  def get_target_value(self, observation_idx: int, td_steps: int):
-    bootstrap_idx = observation_idx + td_steps
+  def get_target_value(self, state_idx: int, td_steps: int):
+    bootstrap_idx = state_idx + td_steps
     value = 0
 
-    if bootstrap_idx < len(self.observations):
-      # If the bootstrap index has been observed, use it as the mcts value
-      value = self.observations[bootstrap_idx].mcts_value * DISCOUNT_FACTOR ** td_steps
+    if bootstrap_idx >= len(self.values):
+      return value
+
+    # If the bootstrap index has been observed, use it as the mcts value
+    value = self.values[bootstrap_idx] * DISCOUNT_FACTOR ** td_steps
 
     # Add the rewards from the observation index to the bootstrap index
-    for i, observation in enumerate(self.observations[observation_idx:bootstrap_idx]):
-      value += observation.reward * DISCOUNT_FACTOR ** i
+    for i, reward in enumerate(self.rewards[state_idx + 1:bootstrap_idx + 1]):
+      value += reward * DISCOUNT_FACTOR ** i
 
     return value
 
-  def get_target_reward(self, observation_idx: int):
-    if observation_idx >= len(self.observations):
+  def get_target_reward(self, state_idx: int):
+    if state_idx >= len(self.rewards):
       return 0
     
-    return self.observations[observation_idx].reward
+    return self.rewards[state_idx]
 
-  def get_target_policy(self, observation_idx: int):
-    if observation_idx >= len(self.observations):
+  def get_target_policy(self, state_idx: int):
+    if state_idx >= len(self.priors):
       return [1 / ACTION_SIZE] * ACTION_SIZE
-    
-    return self.observations[observation_idx].child_visit_priors
+
+    return self.priors[state_idx]
 
   def compute_priorities(self, td_steps: int):
     """
@@ -144,13 +153,13 @@ class Game:
     """
     self.priorities = []
     
-    if len(self.observations) == 0:
-      raise Exception("Game has no observations")
+    if len(self.actions) == 0:
+      raise Exception("Game has no actions")
 
     # Compute priority for each observation
-    for observation_idx in range(len(self.observations)):
-      target_value = self.get_target_value(observation_idx, td_steps)
-      mcts_value = self.observations[observation_idx].mcts_value
+    for state_idx in range(len(self.actions)):
+      target_value = self.get_target_value(state_idx, td_steps)
+      mcts_value = self.values[state_idx]
       priority = self.get_sampling_priority(mcts_value, target_value)
       self.priorities.append(priority)
 
@@ -181,7 +190,12 @@ class Game:
     game_dict = {
       "priority": game.priority,
       "priorities": game.priorities,
-      "observations": [Observation.serealize(o) for o in game.observations]
+      "states": [state.cpu().detach().tolist() for state in game.states],
+      "actions": game.actions,
+      "rewards": game.rewards,
+      "values": game.values,
+      "priors": game.priors,
+      # "observations": [Observation.serealize(o) for o in game.observations]
     }
     return game_dict
   
@@ -190,5 +204,10 @@ class Game:
     game = Game(Env=Env)
     game.priority = game_dict["priority"]
     game.priorities = game_dict["priorities"]
-    game.observations = [Observation.deserialize(o) for o in game_dict["observations"]]
+    game.states = [torch.tensor(state, device=device) for state in game_dict["states"]]
+    game.actions = game_dict["actions"]
+    game.rewards = game_dict["rewards"]
+    game.values = game_dict["values"]
+    game.priors = game_dict["priors"]
+    # game.observations = [Observation.deserialize(o) for o in game_dict["observations"]]
     return game

@@ -67,6 +67,7 @@ class MCTS:
     :param c1: The exploration weight.
     :param c2: The exploration decay.
     """
+    # return child.reward / (1 + child.visit_count)
     discount = DISCOUNT_FACTOR
     prior_weight = np.sqrt(parent.visit_count) / (1 + child.visit_count)
     prior_weight *= (c1 + np.log((parent.visit_count + c2 + 1) / c2))
@@ -92,6 +93,7 @@ class MCTS:
 
   def select_child(self, node: Node, min_max_stats: MinMaxStats):
     scores = [(action, child, self.ucb_score(node, child, min_max_stats)) for action, child in node.children.items()]
+    # return scores[0][0], scores[0][1]
     random.shuffle(scores) # Randomly break ties (stops from constantly picking the last action)
     action, child, _ = max(scores, key=lambda x: x[2])
     return action, child

@@ -12,6 +12,11 @@ def get_root_node(mcts: MCTS, game: Game):
   current_state = game.get_current_state()
   network_output = mcts.network.initial_forward(current_state)
   mcts.expand_node(root, network_output)
+  
+  # Add initial state and reward targets
+  game.states.append(current_state)
+  game.rewards.append(0)
+
   return root
 
 def run_selfplay(actor_id: int, bridge: Bridge, iterations: int, Env: Environment):
@@ -29,8 +34,7 @@ def run_selfplay(actor_id: int, bridge: Bridge, iterations: int, Env: Environmen
     game = play_game(MCTS(network_buffer.latest_network()), Env, bridge)
     game.compute_priorities(TD_STEPS)
     bridge.send_game(game)
-    # print(f"Game completed in {len(game.history)} moves")
-
+    
 def play_game(mcts: MCTS, Env: Environment, bridge: Bridge):
   game = Game(Env=Env)
   
@@ -40,7 +44,7 @@ def play_game(mcts: MCTS, Env: Environment, bridge: Bridge):
   action_histogram = [0] * ACTION_SIZE
 
   with torch.no_grad():
-    while not game.terminal() and len(game.observations) < MAX_MOVES:
+    while not game.terminal() and len(game.actions) < MAX_MOVES:
       root = get_root_node(mcts, game)
       mcts.add_exploration_noise(root)
       mcts.search(root)
@@ -48,9 +52,10 @@ def play_game(mcts: MCTS, Env: Environment, bridge: Bridge):
       action_histogram[action] += 1
       game.apply(action, root)
 
+
   logs = {
-    "Actions": ' '.join([f"{(action_histogram[i] / len(game.observations)):.2f}" for i in range(ACTION_SIZE)]),
-    "Length": f"{len(game.observations):>5d}",
+    "Actions": ' '.join([f"{(action_histogram[i] / len(game.actions)):.2f}" for i in range(ACTION_SIZE)]),
+    "Length": f"{len(game.actions):>5d}",
   }
 
   bridge.send_log(logs)

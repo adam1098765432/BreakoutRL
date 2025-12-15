@@ -12,6 +12,7 @@ lr_decay_steps: 10000 # Taken from psudo code
 training_steps: 1000000 # Taken from psudo code
 save_every: 500
 log_every: 1
+fetch_every: 20
 unroll_steps: 5 # Unroll for K=5 steps (see MuZero Appendix G)
 td_steps: 10 # Bootstrap 10 steps into the future (see MuZero Appendix G)
 weight_decay: 0.0001 # Taken from psudo code (L2 regularization)

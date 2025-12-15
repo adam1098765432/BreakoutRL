@@ -45,21 +45,24 @@ def one_hot_action(x: int):
   arr[0,x] = 1
   return arr
 
-def support_to_scalar(logits: torch.Tensor, support_size=SUPPORT_SIZE) -> float:
+def support_to_scalar(x: torch.Tensor, support_size=SUPPORT_SIZE, is_prob=False) -> float:
   """
+  Inputs support logits or probabilities (if is_prob is True)
+  Outputs scalar float
   Taken from https://github.com/werner-duvaud/muzero-general
   Transform a categorical representation to a scalar
   See paper appendix Network Architecture
   """
   support_size = int(support_size)
   # Decode to a scalar
-  probabilities = torch.softmax(logits, dim=1)
+  probabilities = x if is_prob else torch.softmax(x, dim=1)
   support = (
     torch.tensor([x for x in range(-support_size, support_size + 1)])
     .expand(probabilities.shape)
     .float()
     .to(device=probabilities.device)
   )
+
   x = torch.sum(support * probabilities, dim=1, keepdim=True)
 
   # Invert the scaling (defined in https://arxiv.org/abs/1805.11593)
@@ -69,12 +72,12 @@ def support_to_scalar(logits: torch.Tensor, support_size=SUPPORT_SIZE) -> float:
     - 1
   )
 
-  x = x.cpu().detach().numpy()[0][0]
-
-  return x
+  return x.item()
 
 def scalar_to_support(x: float, support_size=SUPPORT_SIZE):
   """
+  Inputs scalar float
+  Outputs support probabilities
   Taken from https://github.com/werner-duvaud/muzero-general
   Transform a scalar to a categorical representation with (2 * support_size + 1) categories
   See paper appendix Network Architecture
@@ -97,4 +100,5 @@ def scalar_to_support(x: float, support_size=SUPPORT_SIZE):
   prob = prob.masked_fill_(2 * support_size < indexes, 0.0)
   indexes = indexes.masked_fill_(2 * support_size < indexes, 0.0)
   logits.scatter_(2, indexes.long().unsqueeze(-1), prob.unsqueeze(-1))
+  logits = logits[0]
   return logits

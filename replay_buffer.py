@@ -29,26 +29,26 @@ class ReplayBuffer:
     """
     batch = []
     games = self.sample_games(self.batch_size)
-    observation_idxs = [self.sample_observation(game) for game in games]
-    weights = np.empty(len(observation_idxs))
+    state_idxs = [self.sample_state(game) for game in games]
+    weights = np.empty(len(state_idxs))
 
     # Compute weights first
-    for i, (game, observation_idx) in enumerate(zip(games, observation_idxs)):
-      weights[i] = 1 / (len(observation_idxs) * game.priority * game.priorities[observation_idx])
+    for i, (game, state_idx) in enumerate(zip(games, state_idxs)):
+      weights[i] = 1 / (len(state_idxs) * game.priority * game.priorities[state_idx])
 
     weights /= weights.max()
 
-    for i, (game, observation_idx) in enumerate(zip(games, observation_idxs)):
+    for i, (game, state_idx) in enumerate(zip(games, state_idxs)):
       # Get the initial environment state and played actions
-      state = game.observations[observation_idx].state
-      actions = [o.action for o in game.observations[observation_idx:observation_idx + unroll_steps]]
+      state = game.states[state_idx]
+      actions = game.actions[state_idx:state_idx + unroll_steps]
       targets = []
 
       for j in range(unroll_steps):
         # Compute targets
-        target_value = game.get_target_value(observation_idx + j, td_steps)
-        target_reward = game.get_target_reward(observation_idx + j)
-        target_policy = game.get_target_policy(observation_idx + j)
+        target_value = game.get_target_value(state_idx + j, td_steps)
+        target_reward = game.get_target_reward(state_idx + j)
+        target_policy = game.get_target_policy(state_idx + j)
 
         # Convert to probability distributions
         target_value = scalar_to_support(target_value)
@@ -75,15 +75,16 @@ class ReplayBuffer:
 
     return games.tolist()
 
-  def sample_observation(self, game: Game) -> int:
+  def sample_state(self, game: Game) -> int:
     """
     Sample an observation from game using priorities
+    Take from len(game.actions) because of the initial state
     """
     if len(game.priorities) == 0:
       raise Exception("Game has no priorities")
     
     priorities = np.array(game.priorities)
     probabilities = priorities / priorities.sum()
-    idx = np.random.choice(len(game.observations), p=probabilities)
+    idx = np.random.choice(len(game.actions), p=probabilities)
 
     return idx

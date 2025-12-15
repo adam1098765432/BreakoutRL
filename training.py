@@ -36,6 +36,7 @@ def train(replay_buffer: ReplayBuffer, bridge: Bridge, Env=Environment):
       print("Saving network...")
       bridge.broadcast_network(network)
       Network.save(network, NETWORK_PATH)
+    if (i + 1) % FETCH_EVERY == 0:
       fetch_games(replay_buffer, bridge)
     batch = replay_buffer.sample_batch(UNROLL_STEPS, TD_STEPS)
     update_weights(optimizer, network, batch, bridge)
@@ -84,12 +85,18 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple],
       pred_reward_log_probs = F.log_softmax(pred_reward_logits, dim=1)
       pred_policy_log_probs = F.log_softmax(pred_policy_logits, dim=1)
 
+      # if i == 1 and actions[0] == 0:
+      #   print(support_to_scalar(pred_reward_logits), support_to_scalar(target_reward, is_prob=True))
+
       # Cross entropy loss with target probabilities
       # Ignore reward loss for the first step
       raw_value_loss = -((pred_value_log_probs * target_value).sum(dim=1)).mean()
       raw_reward_loss = torch.tensor(0.0).to(device) if i == 0 else -((pred_reward_log_probs * target_reward).sum(dim=1)).mean()
       raw_policy_loss = -((pred_policy_log_probs * target_policy).sum(dim=1)).mean()
       
+      # if raw_reward_loss.item() < 0.000001:
+      #   print(i, target_policy.cpu().detach().tolist(), F.softmax(pred_policy_logits, dim=1).cpu().detach().tolist())
+
       # Weight is to account for sampling bias
       loss += weight * scale_gradient(
         raw_value_loss * VALUE_LOSS_WEIGHT + \
@@ -117,7 +124,7 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple],
     sections = [
       f"Step: {network.training_steps:>6d}",
       f"Value Loss: {(value_loss / n_losses):.4f}",
-      f"Reward Loss: {(reward_loss / n_losses):.4f}",
+      f"Reward Loss: {(reward_loss / n_losses):.8f}",
       f"Policy Loss: {(policy_loss / n_losses):.4f}"
     ]
 

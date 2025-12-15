@@ -150,7 +150,24 @@ class Breakout(Environment):
       state[0, IDX.BRICK_BEGIN + brick_br] = 0
       state[0, IDX.BALL_VY] = -state[0, IDX.BALL_VY]
 
+    # reward = 0
+
+    # if action == 0:
+    #   reward = 1
+    #   self.is_done = True
+    # else:
+    #   reward = 0
+    #   self.is_done = True
+
+    # if state[0, IDX.BALL_X].item() < state[0, IDX.PADDLE_X] and action != 0:
+    #   reward -= 0.1
+
+    # if state[0, IDX.BALL_X].item() > state[0, IDX.PADDLE_X] and action != 1:
+    #   reward -= 0.1
+
     reward = np.clip(reward, -1, 1)
+
+    self.reward = reward
 
     return state, reward
 
@@ -290,5 +307,8 @@ if __name__ == "__main__":
 
   if '--test' in sys.argv:
     play_test_game()
+  elif '--play' in sys.argv:
+    game = Game(Env=Breakout)
+    play(game)
   else:
     train_breakout()

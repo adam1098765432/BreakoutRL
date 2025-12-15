@@ -1,5 +1,6 @@
 from multiprocessing import Queue
 import os
+import time
 from config import *
 from networks import Network, UniformNetwork
 from game import Game
@@ -23,6 +24,8 @@ class Bridge:
     return not self.log_queue.empty()
 
   def send_game(self, game: Game):
+    while self.game_queue.full():
+      self.game_queue.get()
     self.game_queue.put(Game.serealize(game))
 
   def receive_game(self, Env):
