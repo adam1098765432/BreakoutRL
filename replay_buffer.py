@@ -86,6 +86,5 @@ class ReplayBuffer:
     priorities = np.array(game.priorities)
     probabilities = priorities / priorities.sum()
     idx = np.random.choice(len(game.actions), p=probabilities)
-    idx = 0
 
     return idx
