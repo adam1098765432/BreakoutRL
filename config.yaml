@@ -14,12 +14,12 @@ training_steps: 1000000 # Taken from psudo code
 save_every: 500
 log_every: 1
 fetch_every: 20
-save_games_every: 50
+save_games_every: 1000
 unroll_steps: 5 # Unroll for K=5 steps (see MuZero Appendix G)
 td_steps: 10 # Bootstrap 10 steps into the future (see MuZero Appendix G)
 weight_decay: 0.0001 # Taken from psudo code (L2 regularization)
-batch_size: 16
-num_actors: 1
+batch_size: 256
+num_actors: 10
 dirichlet_alpha: 0.25
 dirichlet_frac: 0.25
 actors_use_cuda: False
