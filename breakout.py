@@ -67,9 +67,6 @@ class Breakout(Environment):
     state = self.state
     reward = 0.001
 
-    if action == 2:
-      reward -= 0.001
-
     # Move paddle
     if action == 0:
       state[0, IDX.PADDLE_X] -= PADDLE_SPEED
@@ -169,7 +166,7 @@ class Breakout(Environment):
 
     self.reward = reward
 
-    return state, reward
+    return state.clone(), reward
 
 def render(state: torch.Tensor, screen: pygame.Surface, screen_width, screen_height):
   brick_width = screen_width // BRICK_COLUMNS

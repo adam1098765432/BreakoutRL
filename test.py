@@ -11,32 +11,31 @@ network = Network.load(NETWORK_PATH)
 game = Game(Env=Breakout)
 mcts = MCTS(network)
 rb = ReplayBuffer(1, 1)
-mcts.n_simulations = 3
+mcts.n_simulations = 30
+
+game.states.append(game.get_current_state())
+game.rewards.append(0)
 
 with torch.no_grad():
-  root = get_root_node(mcts, game)
-  mcts.search(root)
-  action = mcts.select_action(root)
-  game.apply(action, root)
-  game.compute_priorities(1)
-  rb.add_game(game)
-  print(root)
-  print(root.children[0])
-  print(root.children[1])
-  print(root.children[2])
+  while not game.terminal() and len(game.actions) < MAX_MOVES:
+    root = get_root_node(mcts, game)
+    mcts.search(root)
+    action = mcts.select_action(root)
+    game.apply(action, root)
+    game.compute_priorities(5)
+    rb.add_game(game)
 
-batch = rb.sample_batch(1, 1)
-
+batch = rb.sample_batch(UNROLL_STEPS, TD_STEPS)
 game_state, actions, targets, weight = batch[0]
 
 print("Game state:", game_state)
-print("Actions:", actions)
-print("Targets:")
+print(f"Actions ({len(actions)}):", actions)
+print(f"Targets ({len(targets)}):")
 for target in targets:
   target_value, target_reward, target_policy = target
-  print("Value:", support_to_scalar(target_value, is_prob=True))
-  print("Reward:", support_to_scalar(target_reward, is_prob=True))
-  print("Policy:", target_policy)
+  value_val = support_to_scalar(target_value, is_prob=True)
+  reward_val = support_to_scalar(target_reward, is_prob=True)
+  print(f"  Value: {value_val:.4f}, Reward: {reward_val:.4f}, Policy: {target_policy}")
 print("Weight:", weight)
 
 # state = game.get_current_state()

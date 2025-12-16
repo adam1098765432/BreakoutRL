@@ -44,7 +44,7 @@ class ReplayBuffer:
       actions = game.actions[state_idx:state_idx + unroll_steps]
       targets = []
 
-      for j in range(unroll_steps):
+      for j in range(unroll_steps + 1):
         # Compute targets
         target_value = game.get_target_value(state_idx + j, td_steps)
         target_reward = game.get_target_reward(state_idx + j)
@@ -86,5 +86,6 @@ class ReplayBuffer:
     priorities = np.array(game.priorities)
     probabilities = priorities / priorities.sum()
     idx = np.random.choice(len(game.actions), p=probabilities)
+    idx = 0
 
     return idx

@@ -20,7 +20,7 @@ class Environment:
     return state, reward
 
   def get_state(self):
-    return self.state
+    return self.state.clone()
 
   def get_reward(self):
     return self.reward

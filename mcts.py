@@ -67,7 +67,6 @@ class MCTS:
     :param c1: The exploration weight.
     :param c2: The exploration decay.
     """
-    # return child.reward / (1 + child.visit_count)
     discount = DISCOUNT_FACTOR
     prior_weight = np.sqrt(parent.visit_count) / (1 + child.visit_count)
     prior_weight *= (c1 + np.log((parent.visit_count + c2 + 1) / c2))

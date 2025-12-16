@@ -141,33 +141,28 @@ class Network(nn.Module):
   def initial_forward(self, state: torch.Tensor):
     hidden_state = self.latent_model(state)
     policy_logits, value = self.prediction_model(hidden_state)
-
     value = support_to_scalar(value)
-
     return NetworkOutput(hidden_state, 0.0, policy_logits, value)
   
   def initial_forward_grad(self, state: torch.Tensor):
     hidden_state = self.latent_model(state)
     policy_logits, value = self.prediction_model(hidden_state)
-
     reward = scalar_to_support(0)
-
-    return NetworkOutput(hidden_state, reward, policy_logits, value)
+    return hidden_state, reward, policy_logits, value
+    # return NetworkOutput(hidden_state, reward, policy_logits, value)
 
   def recurrent_forward(self, state: torch.Tensor, action: int):
     hidden_state, reward = self.dynamics_model(state, one_hot_action(action))
     policy_logits, value = self.prediction_model(hidden_state)
-
     value = support_to_scalar(value)
     reward = support_to_scalar(reward)
-
     return NetworkOutput(hidden_state, reward, policy_logits, value)
   
   def recurrent_forward_grad(self, state: torch.Tensor, action: int):
     hidden_state, reward = self.dynamics_model(state, one_hot_action(action))
     policy_logits, value = self.prediction_model(hidden_state)
-
-    return NetworkOutput(hidden_state, reward, policy_logits, value)
+    return hidden_state, reward, policy_logits, value
+    # return NetworkOutput(hidden_state, reward, policy_logits, value)
 
   @staticmethod
   def save(network: nn.Module, path: str):
@@ -208,7 +203,8 @@ class UniformNetwork(Network):
     policy_logits = torch.ones(1, ACTION_SIZE, device=device)
     reward = scalar_to_support(0)
     value = scalar_to_support(0)
-    return NetworkOutput(hidden_state, reward, policy_logits, value)
+    return hidden_state, reward, policy_logits, value
+    # return NetworkOutput(hidden_state, reward, policy_logits, value)
 
   def recurrent_forward(self, state: torch.Tensor, action: int):
     hidden_state = torch.ones(1, HIDDEN_SIZE, device=device)
@@ -220,4 +216,5 @@ class UniformNetwork(Network):
     policy_logits = torch.ones(1, ACTION_SIZE, device=device)
     reward = scalar_to_support(0)
     value = scalar_to_support(0)
-    return NetworkOutput(hidden_state, reward, policy_logits, value)
+    return hidden_state, reward, policy_logits, value
+    # return NetworkOutput(hidden_state, reward, policy_logits, value)

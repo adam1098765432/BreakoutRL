@@ -12,11 +12,6 @@ def get_root_node(mcts: MCTS, game: Game):
   current_state = game.get_current_state()
   network_output = mcts.network.initial_forward(current_state)
   mcts.expand_node(root, network_output)
-  
-  # Add initial state and reward targets
-  game.states.append(current_state)
-  game.rewards.append(0)
-
   return root
 
 def run_selfplay(actor_id: int, bridge: Bridge, iterations: int, Env: Environment):
@@ -43,6 +38,11 @@ def play_game(mcts: MCTS, Env: Environment, bridge: Bridge):
 
   action_histogram = [0] * ACTION_SIZE
 
+  # Add initial state and reward targets
+  game.states.append(game.get_current_state())
+  game.rewards.append(0)
+  # game.actions.append(2)
+
   with torch.no_grad():
     while not game.terminal() and len(game.actions) < MAX_MOVES:
       root = get_root_node(mcts, game)
@@ -51,7 +51,6 @@ def play_game(mcts: MCTS, Env: Environment, bridge: Bridge):
       action = mcts.select_action(root)
       action_histogram[action] += 1
       game.apply(action, root)
-
 
   logs = {
     "Actions": ' '.join([f"{(action_histogram[i] / len(game.actions)):.2f}" for i in range(ACTION_SIZE)]),

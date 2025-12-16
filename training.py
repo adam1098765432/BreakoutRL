@@ -53,24 +53,19 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple],
   for game_state, actions, targets, weight in batch:
 
     # Initial step
-    network_output = network.initial_forward_grad(game_state)
-    predictions = [(
-      1.0,
-      network_output.value,
-      network_output.reward,
-      network_output.policy_logits
-    )]
+    # This is the hidden state for the first unroll step
+    # The value is the expected value of the first unroll step
+    # The reward is not used
+    # The policy is the policy for the first unroll step
+    hidden_state, reward, policy_logits, value = network.initial_forward_grad(game_state)
+    predictions = [(1.0, value, reward, policy_logits)]
 
     # Recurrent steps
     for action in actions:
-      network_output = network.recurrent_forward_grad(network_output.hidden_state, action)
-      network_output.hidden_state = scale_gradient(network_output.hidden_state, 0.5)
-      predictions += [(
-        1 / len(actions), # Scale gradient by number of unroll steps (actions)
-        network_output.value,
-        network_output.reward,
-        network_output.policy_logits
-      )]
+      # The first time this runs, it is ran on the initial hidden state
+      hidden_state, reward, policy_logits, value = network.recurrent_forward_grad(hidden_state, action)
+      hidden_state = scale_gradient(hidden_state, 0.5)
+      predictions += [(1 / len(actions), value, reward, policy_logits)]
 
     # Accumulate predictions and targets
     for i, (prediction, target) in enumerate(zip(predictions, targets)):
@@ -85,25 +80,15 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple],
       pred_reward_log_probs = F.log_softmax(pred_reward_logits, dim=1)
       pred_policy_log_probs = F.log_softmax(pred_policy_logits, dim=1)
 
-      # if i == 1 and actions[0] == 0:
-      #   print(support_to_scalar(pred_reward_logits), support_to_scalar(target_reward, is_prob=True))
-
       # Cross entropy loss with target probabilities
       # Ignore reward loss for the first step
       raw_value_loss = -((pred_value_log_probs * target_value).sum(dim=1)).mean()
       raw_reward_loss = torch.tensor(0.0).to(device) if i == 0 else -((pred_reward_log_probs * target_reward).sum(dim=1)).mean()
       raw_policy_loss = -((pred_policy_log_probs * target_policy).sum(dim=1)).mean()
-      
-      # if raw_reward_loss.item() < 0.000001:
-      #   print(i, target_policy.cpu().detach().tolist(), F.softmax(pred_policy_logits, dim=1).cpu().detach().tolist())
+      raw_loss = raw_value_loss * VALUE_LOSS_WEIGHT + raw_reward_loss + raw_policy_loss
 
       # Weight is to account for sampling bias
-      loss += weight * scale_gradient(
-        raw_value_loss * VALUE_LOSS_WEIGHT + \
-        raw_reward_loss + \
-        raw_policy_loss,
-        gradient_scale
-      )
+      loss += weight * scale_gradient(raw_loss, gradient_scale)
 
       # Collect losses
       value_loss += raw_value_loss.item()
