@@ -3,6 +3,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import os
 
+"""
+Might need to make these models bigger
+(especially before the heads)
+"""
+
 class RepresentationModel(nn.Module):
   """
   Take a state as input and output a latent representation.
@@ -10,12 +15,18 @@ class RepresentationModel(nn.Module):
   def __init__(self):
     super().__init__()
     self.fc1 = nn.Linear(STATE_SIZE, HIDDEN_SIZE)
-    self.fc2 = nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE)
 
   def forward(self, state):
-    x = F.relu(self.fc1(state))
-    x = F.relu(self.fc2(x))
-    return x
+    hidden_state = self.fc1(state)
+
+    # Scale hidden state between [0, 1]
+    min_enc = hidden_state.min(1, keepdim=True)[0]
+    max_enc = hidden_state.max(1, keepdim=True)[0]
+    scl_enc = max_enc - min_enc
+    scl_enc[scl_enc < 1e-5] += 1e-5
+    hidden_state_norm = (hidden_state - min_enc) / scl_enc
+
+    return hidden_state_norm
 
 class PredictionModel(nn.Module):
   """
@@ -23,52 +34,27 @@ class PredictionModel(nn.Module):
   """
   def __init__(self):
     super().__init__()
-    self.fc1 = nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE)
-    self.fc2 = nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE)
-    self.reduce_policy = nn.Linear(HIDDEN_SIZE, 4)
-    self.reduce_value = nn.Linear(HIDDEN_SIZE, 4)
-    self.policy = nn.Linear(4, ACTION_SIZE) # The move to play
-    self.value = nn.Linear(4, 2 * SUPPORT_SIZE + 1) # Expected final reward
-
+    self.policy_fc1 = nn.Linear(HIDDEN_SIZE, 16)
+    self.policy_fc2 = nn.Linear(16, ACTION_SIZE)
+    self.value_fc1 = nn.Linear(HIDDEN_SIZE, 16)
+    self.value_fc2 = nn.Linear(16, 2 * SUPPORT_SIZE + 1)
+    
     # Zero initialize value head
-    nn.init.zeros_(self.value.weight)
-    nn.init.zeros_(self.value.bias)
+    # nn.init.zeros_(self.value_fc2.weight)
+    # nn.init.zeros_(self.value_fc2.bias)
 
     # Initialize policy head with scaled normal
-    nn.init.normal_(self.policy.weight, mean=0, std=0.01)
-    nn.init.normal_(self.policy.bias, mean=0, std=0.01)
+    # nn.init.normal_(self.policy_fc2.weight, mean=0, std=0.01)
+    # nn.init.normal_(self.policy_fc2.bias, mean=0, std=0.01)
 
   def forward(self, state):
-    x = F.relu(self.fc1(state))
-    x = F.relu(self.fc2(x))
-    p = self.reduce_policy(x)
-    v = self.reduce_value(x)
-    return self.policy(p), self.value(v)
-
-class ResBlock(nn.Module):
-  """
-  This residual block is based on https://arxiv.org/pdf/1603.05027.pdf<br>
-  It is uses the constant scaling method since it is not a CNN.
-
-  :param channels: The number of channels in the input
-  :param alpha: The scaling factor
-  """
-  def __init__(self, channels, alpha=0.2):
-    super().__init__()
-    self.alpha = alpha
-    self.fc1 = nn.Linear(channels, channels)
-    self.n1 = nn.LayerNorm(channels)
-    self.fc2 = nn.Linear(channels, channels)
-    self.n2 = nn.LayerNorm(channels)
-
-  def forward(self, x):
-    identity = x
-    x = F.relu(self.fc1(x))
-    x = self.n1(x)
-    x = F.relu(self.fc2(x))
-    x = self.n2(x)
-    x = identity + x * self.alpha
-    return x
+    p = self.policy_fc1(state)
+    p = F.elu(p)
+    p = self.policy_fc2(p)
+    v = self.value_fc1(state)
+    v = F.elu(v)
+    v = self.value_fc2(v)
+    return p, v
 
 class DynamicsModel(nn.Module):
   """
@@ -90,24 +76,36 @@ class DynamicsModel(nn.Module):
   """
   def __init__(self, n_blocks=2):
     super().__init__()
-    self.model = nn.Sequential(*[ResBlock(HIDDEN_SIZE + ACTION_SIZE) for _ in range(n_blocks)])
-    self.state = nn.Linear(HIDDEN_SIZE + ACTION_SIZE, HIDDEN_SIZE)
-    self.reward = nn.Linear(HIDDEN_SIZE + ACTION_SIZE, 2 * SUPPORT_SIZE + 1)
+    self.state_fc1 = nn.Linear(HIDDEN_SIZE + ACTION_SIZE, 16)
+    self.state_fc2 = nn.Linear(16, HIDDEN_SIZE)
+    self.reward_fc1 = nn.Linear(HIDDEN_SIZE, 16)
+    self.reward_fc2 = nn.Linear(16, 2 * SUPPORT_SIZE + 1)
 
     # Initialize reward head with zeros
-    nn.init.zeros_(self.reward.weight)
-    nn.init.zeros_(self.reward.bias)
+    # nn.init.zeros_(self.reward_fc2.weight)
+    # nn.init.zeros_(self.reward_fc2.bias)
 
     # Initialize state head with scaled normal
-    nn.init.normal_(self.state.weight, mean=0, std=0.01)
-    nn.init.normal_(self.state.bias, mean=0, std=0.01)
+    # nn.init.normal_(self.state_fc2.weight, mean=0, std=0.01)
+    # nn.init.normal_(self.state_fc2.bias, mean=0, std=0.01)
 
   def forward(self, state, action):
-    x = torch.cat([state, action], dim=1)
-    x = self.model(x)
-    state = F.relu(self.state(x))
-    reward = self.reward(x)
-    return state, reward
+    out = torch.cat([state, action], dim=1)
+    out = self.state_fc1(out)
+    out = F.elu(out)
+    hidden_state = self.state_fc2(out)
+    out = self.reward_fc1(hidden_state)
+    out = F.elu(out)
+    reward = self.reward_fc2(out)
+
+    # Scale hidden state between [0, 1]
+    min_enc = hidden_state.min(1, keepdim=True)[0]
+    max_enc = hidden_state.max(1, keepdim=True)[0]
+    scl_enc = max_enc - min_enc
+    scl_enc[scl_enc < 1e-5] += 1e-5
+    hidden_state_norm = (hidden_state - min_enc) / scl_enc
+
+    return hidden_state_norm, reward
 
 class NetworkOutput:
   """
@@ -133,23 +131,22 @@ class NetworkOutput:
 class Network(nn.Module):
   def __init__(self):
     super().__init__()
-    self.latent_model = RepresentationModel()
+    self.representation_model = RepresentationModel()
     self.dynamics_model = DynamicsModel()
     self.prediction_model = PredictionModel()
     self.training_steps = 0
 
   def initial_forward(self, state: torch.Tensor):
-    hidden_state = self.latent_model(state)
+    hidden_state = self.representation_model(state)
     policy_logits, value = self.prediction_model(hidden_state)
     value = support_to_scalar(value)
     return NetworkOutput(hidden_state, 0.0, policy_logits, value)
   
   def initial_forward_grad(self, state: torch.Tensor):
-    hidden_state = self.latent_model(state)
+    hidden_state = self.representation_model(state)
     policy_logits, value = self.prediction_model(hidden_state)
     reward = scalar_to_support(0)
     return hidden_state, reward, policy_logits, value
-    # return NetworkOutput(hidden_state, reward, policy_logits, value)
 
   def recurrent_forward(self, state: torch.Tensor, action: int):
     hidden_state, reward = self.dynamics_model(state, one_hot_action(action))
@@ -162,7 +159,6 @@ class Network(nn.Module):
     hidden_state, reward = self.dynamics_model(state, one_hot_action(action))
     policy_logits, value = self.prediction_model(hidden_state)
     return hidden_state, reward, policy_logits, value
-    # return NetworkOutput(hidden_state, reward, policy_logits, value)
 
   @staticmethod
   def save(network: nn.Module, path: str):

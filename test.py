@@ -1,6 +1,6 @@
 from breakout import Breakout
 from config import *
-from game import Game, Observation
+from game import Game
 from mcts import MCTS
 from networks import Network
 from replay_buffer import ReplayBuffer
@@ -25,7 +25,7 @@ with torch.no_grad():
     game.compute_priorities(5)
     rb.add_game(game)
 
-batch = rb.sample_batch(UNROLL_STEPS, TD_STEPS)
+batch = rb.sample_batch(UNROLL_STEPS, TD_STEPS)[0]
 game_state, actions, targets, weight = batch[0]
 
 print("Game state:", game_state)

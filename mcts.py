@@ -77,22 +77,33 @@ class MCTS:
       value_score = 0
     return prior_score + value_score
 
-  def select_action(self, node: Node) -> int:
+  def select_action(node: Node, temperature: float) -> int:
     """
-    Selects an action from the search tree.
-    
-    :param node: The node to select an action from
-    :return: The action to take
+    Taken from: https://github.com/werner-duvaud/muzero-general
+    Select action according to the visit count distribution and the temperature.
+    The temperature is changed dynamically with the visit_softmax_temperature function
+    in the config.
     """
-    actions = node.children.keys()
-    visit_counts = [child.visit_count for child in node.children.values()]
-    temp = get_temperature(self.network.training_steps)
-    action_idx = torch.multinomial(torch.tensor(visit_counts, device=device) ** (1 / temp), num_samples=1).item()
-    return list(actions)[action_idx]
+    visit_counts = np.array(
+      [child.visit_count for child in node.children.values()], dtype="int32"
+    )
+    actions = [action for action in node.children.keys()]
+    if temperature == 0:
+      action = actions[np.argmax(visit_counts)]
+    elif temperature == MAX_FLOAT:
+      action = np.random.choice(actions)
+    else:
+      # See paper appendix Data Generation
+      visit_count_distribution = visit_counts ** (1 / temperature)
+      visit_count_distribution = visit_count_distribution / sum(
+        visit_count_distribution
+      )
+      action = np.random.choice(actions, p=visit_count_distribution)
+
+    return action
 
   def select_child(self, node: Node, min_max_stats: MinMaxStats):
     scores = [(action, child, self.ucb_score(node, child, min_max_stats)) for action, child in node.children.items()]
-    # return scores[0][0], scores[0][1]
     random.shuffle(scores) # Randomly break ties (stops from constantly picking the last action)
     action, child, _ = max(scores, key=lambda x: x[2])
     return action, child
@@ -132,7 +143,7 @@ class MCTS:
     for node in reversed(search_path):
       node.value_sum += value # Add negative if it's the opponent's turn (this is a single player game)
       node.visit_count += 1
-      min_max_stats.update(node.value())
+      min_max_stats.update(node.reward + DISCOUNT_FACTOR * node.value())
       value = node.reward + DISCOUNT_FACTOR * value
 
   def add_exploration_noise(self, node: Node, alpha=DIRICHLET_ALPHA, frac=DIRICHLET_FRAC):

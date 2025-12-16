@@ -12,8 +12,6 @@ import pygame
 import torch
 import sys
 
-os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
-
 # Game parameters
 BRICK_ROWS = 7
 BRICK_COLUMNS = 10
@@ -285,13 +283,13 @@ def play_test_game():
     with torch.no_grad():
       root = get_root_node(mcts, game)
       mcts.search(root)
-      action = mcts.select_action(root)
+      action = mcts.select_action(root, temperature=0.1)
       return action
 
   live(game, get_action)
 
 def train_breakout():
-  replay_buffer = ReplayBuffer(1000, BATCH_SIZE)
+  replay_buffer = ReplayBuffer(10000, BATCH_SIZE)
   muzero(replay_buffer, Breakout)
 
 if __name__ == "__main__":

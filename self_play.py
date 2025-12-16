@@ -3,12 +3,13 @@ from bridge import Bridge, NetworkBuffer
 from config import *
 from game import Environment, Game
 from mcts import MCTS, Node
+from utility import get_temperature
 
 def get_root_node(mcts: MCTS, game: Game):
   """
   Get the root node as the current state of the game.
   """
-  root = Node(1.0 / ACTION_SIZE)
+  root = Node(0)
   current_state = game.get_current_state()
   network_output = mcts.network.initial_forward(current_state)
   mcts.expand_node(root, network_output)
@@ -32,6 +33,7 @@ def run_selfplay(actor_id: int, bridge: Bridge, iterations: int, Env: Environmen
     
 def play_game(mcts: MCTS, Env: Environment, bridge: Bridge):
   game = Game(Env=Env)
+  temp = get_temperature(mcts.network.training_steps)
   
   # Are we supposed to add an initial observation?
   # game.states.append(game.get_current_state())
@@ -41,14 +43,13 @@ def play_game(mcts: MCTS, Env: Environment, bridge: Bridge):
   # Add initial state and reward targets
   game.states.append(game.get_current_state())
   game.rewards.append(0)
-  # game.actions.append(2)
 
   with torch.no_grad():
     while not game.terminal() and len(game.actions) < MAX_MOVES:
       root = get_root_node(mcts, game)
       mcts.add_exploration_noise(root)
       mcts.search(root)
-      action = mcts.select_action(root)
+      action = mcts.select_action(root, temperature=temp)
       action_histogram[action] += 1
       game.apply(action, root)
 

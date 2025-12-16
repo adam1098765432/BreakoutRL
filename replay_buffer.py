@@ -1,7 +1,7 @@
 import numpy as np
 from config import *
 from utility import *
-from game import Game, Observation
+from game import Game
 
 
 class ReplayBuffer:
@@ -28,18 +28,19 @@ class ReplayBuffer:
     Weight is to account for sampling bias
     """
     batch = []
-    games = self.sample_games(self.batch_size)
-    state_idxs = [self.sample_state(game) for game in games]
-    weights = np.empty(len(state_idxs))
+    game_idxs, game_probs = self.sample_games(self.batch_size)
+    state_idxs, state_probs = self.sample_states(game_idxs)
+    weights = np.empty(self.batch_size)
 
     # Compute weights first
-    for i, (game, state_idx) in enumerate(zip(games, state_idxs)):
-      weights[i] = 1 / (len(state_idxs) * game.priority * game.priorities[state_idx])
+    for i, (game_prob, state_prob) in enumerate(zip(game_probs, state_probs)):
+      weights[i] = 1 / (self.batch_size * game_prob * state_prob)
 
     weights /= weights.max()
 
-    for i, (game, state_idx) in enumerate(zip(games, state_idxs)):
+    for i, (game_idx, state_idx) in enumerate(zip(game_idxs, state_idxs)):
       # Get the initial environment state and played actions
+      game = self.buffer[game_idx]
       states = game.states[state_idx:state_idx + unroll_steps + 1]
       actions = game.actions[state_idx:state_idx + unroll_steps]
       targets = []
@@ -61,9 +62,9 @@ class ReplayBuffer:
       # Add to batch
       batch.append((states, actions, targets, weights[i]))
 
-    return batch
+    return batch, game_idxs, state_idxs
 
-  def sample_games(self, num_samples: int) -> list[Game]:
+  def sample_games(self, num_samples: int) -> tuple[list[int], list[float]]:
     # Sample game from buffer either uniformly or according to some priority.
     priorities = np.array([g.priority for g in self.buffer])
 
@@ -71,20 +72,39 @@ class ReplayBuffer:
       raise Exception("Replay buffer is empty")
 
     probabilities = priorities / priorities.sum()
-    games = np.random.choice(self.buffer, p=probabilities, size=num_samples)
+    idxs = np.random.choice(len(self.buffer), p=probabilities, size=num_samples)
+    games = [self.buffer[i] for i in idxs]
 
-    return games.tolist()
+    return games, probabilities[idxs].tolist()
 
-  def sample_state(self, game: Game) -> int:
+  def sample_states(self, game_idxs: list[int]) -> tuple[list[int], list[float]]:
+    samples = [self.sample_state(game_idx) for game_idx in game_idxs]
+    states = [state for state, _ in samples]
+    probs = [prob for _, prob in samples]
+    return states, probs
+
+  def sample_state(self, game_idx: int) -> tuple[int, float]:
     """
     Sample an observation from game using priorities
     Take from len(game.actions) because of the initial state
     """
+    game = self.buffer[game_idx]
+
     if len(game.priorities) == 0:
       raise Exception("Game has no priorities")
     
     priorities = np.array(game.priorities)
     probabilities = priorities / priorities.sum()
-    idx = np.random.choice(len(game.actions), p=probabilities)
+    idx = np.random.choice(len(game.values), p=probabilities)
 
-    return idx
+    return idx, probabilities[idx]
+  
+  def update_priorities(self, game_idxs: list[int], state_idxs: list[int], priorities: np.ndarray):
+    # If the games are being updated asynchronously, the game_idxs
+    # may not correspond to the same game anymore.
+    for i in range(len(priorities)):
+      game_idx, state_idx = game_idxs[i], state_idxs[i]
+      priority = priorities[i, :]
+      end_idx = min(state_idx + len(priority), len(self.buffer[game_idx].priorities))
+      self.buffer[game_idx].priorities[state_idx:end_idx] = priority[:end_idx - state_idx]
+      self.buffer[game_idx].priority = np.max(self.buffer[game_idx].priorities)

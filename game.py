@@ -28,42 +28,6 @@ class Environment:
   def terminal(self):
     return False
 
-class Observation:
-  """
-  An observation from the environment
-  (based on the result of a MCTS search for a given node).
-
-  The motivation behind this class is to prevent misalignment
-  between each of these statistics during the batching process.
-  """
-
-  def __init__(self, state, action, reward, child_visit_priors, mcts_value):
-    self.state: torch.Tensor = state # The state of this observation
-    self.action: int = action # The action taken from this observation
-    self.reward: float = reward # The reward for taking the action
-    self.child_visit_priors: list[float] = child_visit_priors # The visit proportions for each child 
-    self.mcts_value: float = mcts_value # The propagated MCTS value for this observation
-
-  @staticmethod
-  def serealize(observation):
-    return {
-      "state": observation.state.tolist(),
-      "action": observation.action,
-      "reward": observation.reward,
-      "child_visit_priors": observation.child_visit_priors,
-      "mcts_value": observation.mcts_value
-    }
-  
-  @staticmethod
-  def deserialize(observation_dict):
-    return Observation(
-      torch.tensor(observation_dict["state"], device=device),
-      observation_dict["action"],
-      observation_dict["reward"],
-      observation_dict["child_visit_priors"],
-      observation_dict["mcts_value"]
-    )
-
 class Game:
   """
   A single episode of interaction with the environment.
@@ -74,7 +38,6 @@ class Game:
     self.environment = Env(device)
     self.priority = None
     self.priorities = []
-    # self.observations: list[Observation] = []
     self.states = []
     self.actions = []
     self.rewards = []
@@ -122,11 +85,9 @@ class Game:
     bootstrap_idx = state_idx + td_steps
     value = 0
 
-    if bootstrap_idx >= len(self.values):
-      return value
-
     # If the bootstrap index has been observed, use it as the mcts value
-    value = self.values[bootstrap_idx] * DISCOUNT_FACTOR ** td_steps
+    if bootstrap_idx < len(self.values):
+      value = self.values[bootstrap_idx] * DISCOUNT_FACTOR ** td_steps
 
     # Add the rewards from the observation index to the bootstrap index
     for i, reward in enumerate(self.rewards[state_idx + 1:bootstrap_idx + 1]):
@@ -157,10 +118,9 @@ class Game:
       raise Exception("Game has no actions")
 
     # Compute priority for each observation
-    for state_idx in range(len(self.actions)):
+    for state_idx, root_value in enumerate(self.values):
       target_value = self.get_target_value(state_idx, td_steps)
-      mcts_value = self.values[state_idx]
-      priority = self.get_sampling_priority(mcts_value, target_value)
+      priority = self.get_sampling_priority(root_value, target_value)
       self.priorities.append(priority)
 
     self.priority = np.max(self.priorities)
@@ -195,7 +155,6 @@ class Game:
       "rewards": game.rewards,
       "values": game.values,
       "priors": game.priors,
-      # "observations": [Observation.serealize(o) for o in game.observations]
     }
     return game_dict
   
@@ -209,5 +168,4 @@ class Game:
     game.rewards = game_dict["rewards"]
     game.values = game_dict["values"]
     game.priors = game_dict["priors"]
-    # game.observations = [Observation.deserialize(o) for o in game_dict["observations"]]
     return game
