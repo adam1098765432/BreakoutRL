@@ -21,9 +21,13 @@ class Environment:
     return state, reward
 
   def step(self, action: int):
+    total_reward = 0
     for _ in range(self.frame_skip):
-      self.state, self.reward = self._step(action)
-    return self.state.clone(), self.reward
+      state, reward = self._step(action)
+      total_reward += reward
+    self.state = state
+    self.reward = total_reward
+    return state.clone(), total_reward
 
   def get_state(self):
     return self.state.clone()
