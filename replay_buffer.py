@@ -40,7 +40,7 @@ class ReplayBuffer:
 
     for i, (game, state_idx) in enumerate(zip(games, state_idxs)):
       # Get the initial environment state and played actions
-      state = game.states[state_idx]
+      states = game.states[state_idx:state_idx + unroll_steps + 1]
       actions = game.actions[state_idx:state_idx + unroll_steps]
       targets = []
 
@@ -59,7 +59,7 @@ class ReplayBuffer:
         targets += [(target_value, target_reward, target_policy)]
 
       # Add to batch
-      batch.append((state, actions, targets, weights[i]))
+      batch.append((states, actions, targets, weights[i]))
 
     return batch
 

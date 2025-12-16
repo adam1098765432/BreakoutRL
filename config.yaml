@@ -22,3 +22,4 @@ dirichlet_alpha: 0.25
 dirichlet_frac: 0.25
 actors_use_cuda: False
 value_loss_weight: 0.25
+consistency_loss_weight: 0.1
