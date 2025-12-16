@@ -12,6 +12,7 @@ with open("config.yaml", "r") as f:
 
 # Training parameters
 NETWORK_PATH: str = config["network_path"]
+REPLAY_BUFFER_PATH: str = config["replay_buffer_path"]
 MAX_FLOAT = float('inf')
 STATE_SIZE: int = config["state_size"]
 ACTION_SIZE: int = config["action_size"]
@@ -27,6 +28,7 @@ TRAINING_STEPS: int = config["training_steps"]
 SAVE_EVERY: int = config["save_every"]
 LOG_EVERY: int = config["log_every"]
 FETCH_EVERY: int = config["fetch_every"]
+SAVE_GAMES_EVERY: int = config["save_games_every"]
 UNROLL_STEPS: int = config["unroll_steps"]
 TD_STEPS: int = config["td_steps"]
 WEIGHT_DECAY: float = config["weight_decay"]

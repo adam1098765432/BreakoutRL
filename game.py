@@ -55,7 +55,9 @@ class Game:
     self.priors = []
 
   def reset(self):
+    old_frame_skip = self.environment.frame_skip
     self.environment = self.Env(device)
+    self.environment.frame_skip = old_frame_skip
     self.priority = None
     self.priorities = []
     self.observations = []
@@ -156,7 +158,7 @@ class Game:
     return np.abs(mcts_value - target_value) + 1e-8 # Don't forget to normalize to get the probability!
 
   @staticmethod
-  def serealize(game):
+  def serialize(game):
     game_dict = {
       "priority": game.priority,
       "priorities": game.priorities,

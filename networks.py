@@ -90,6 +90,7 @@ class DynamicsModel(nn.Module):
     # nn.init.normal_(self.state_fc2.bias, mean=0, std=0.01)
 
   def forward(self, state, action):
+    # print(state.shape, action.shape)
     out = torch.cat([state, action], dim=1)
     out = self.state_fc1(out)
     out = F.elu(out)
@@ -145,7 +146,7 @@ class Network(nn.Module):
   def initial_forward_grad(self, state: torch.Tensor):
     hidden_state = self.representation_model(state)
     policy_logits, value = self.prediction_model(hidden_state)
-    reward = scalar_to_support(0)
+    reward = scalar_to_support(0).repeat(state.shape[0], 1)
     return hidden_state, reward, policy_logits, value
 
   def recurrent_forward(self, state: torch.Tensor, action: int):
@@ -155,8 +156,8 @@ class Network(nn.Module):
     reward = support_to_scalar(reward)
     return NetworkOutput(hidden_state, reward, policy_logits, value)
   
-  def recurrent_forward_grad(self, state: torch.Tensor, action: int):
-    hidden_state, reward = self.dynamics_model(state, one_hot_action(action))
+  def recurrent_forward_grad(self, state: torch.Tensor, action: torch.Tensor):
+    hidden_state, reward = self.dynamics_model(state, one_hot_action_batched(action))
     policy_logits, value = self.prediction_model(hidden_state)
     return hidden_state, reward, policy_logits, value
 

@@ -77,7 +77,7 @@ class MCTS:
       value_score = 0
     return prior_score + value_score
 
-  def select_action(self, node: Node, temperature: float) -> int:
+  def select_action(self, node: Node, temperature: float = 1) -> int:
     """
     Taken from: https://github.com/werner-duvaud/muzero-general
     Select action according to the visit count distribution and the temperature.

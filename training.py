@@ -5,6 +5,7 @@ from replay_buffer import ReplayBuffer
 import time
 from utility import *
 import torch.nn.functional as F
+from rich import inspect
 
 def train(replay_buffer: ReplayBuffer, bridge: Bridge, Env=Environment):
   """
@@ -42,12 +43,172 @@ def train(replay_buffer: ReplayBuffer, bridge: Bridge, Env=Environment):
     if (i + 1) % FETCH_EVERY == 0:
       fetch_games(replay_buffer, bridge)
     
+    # Save games
+    if (i + 1) % SAVE_GAMES_EVERY == 0:
+      ReplayBuffer.save(replay_buffer, REPLAY_BUFFER_PATH)
+
     # Train network
     batch, game_idx, state_idxs = replay_buffer.sample_batch(UNROLL_STEPS, TD_STEPS)
-    new_priorities = update_weights(optimizer, network, batch, bridge)
+    # new_priorities = update_weights(optimizer, network, batch, bridge)
+    losses, new_priorities = update_weights_parallel(optimizer, network, batch)
 
     # Update priorities
     replay_buffer.update_priorities(game_idx, state_idxs, new_priorities)
+
+    # Logging
+    if bridge.has_log():
+      logs = bridge.receive_log()
+      sections = [
+        f"Step: {network.training_steps:>6d}",
+        f"Value Loss: {losses[0]:.4f}",
+        f"Reward Loss: {losses[1]:.8f}",
+        f"Policy Loss: {losses[2]:.4f}",
+      ]
+
+      for k, v in logs.items():
+        sections.append(f"{k}: {v}")
+
+      print(" | ".join(sections))
+
+def update_weights_parallel(optimizer: torch.optim, network: Network, batch: list[tuple]):
+  """
+  Batch:
+  game_states      (B, K+1, z)
+  actions          (B, K)
+  target_value     (B, K+1, s)
+  target_reward    (B, K+1, s)
+  target_policy    (B, K+1, a)
+  weights          (B,)
+  """
+  
+  optimizer.zero_grad()
+
+  FULL_SUPPORT_SIZE = 2 * SUPPORT_SIZE + 1
+
+  # game_states: list[B] of list[K+1] of (1, z)
+  game_states = torch.cat(
+    [torch.cat(gs, dim=0).unsqueeze(0) for gs, _, _, _ in batch],
+    dim=0
+  )  # (B, K+1, z)
+
+  actions = torch.tensor(
+    [a for _, a, _, _ in batch],
+    device=device,
+    dtype=torch.long
+  )  # (B, K)
+
+  weights = torch.tensor(
+    [w for _, _, _, w in batch],
+    device=device
+  )  # (B,)
+
+  target_value = torch.cat([
+    torch.cat([target[0] for target in targets], dim=0).unsqueeze(0)
+    for _, _, targets, _ in batch
+  ], dim=0)  # (B, K+1, s)
+
+  target_reward = torch.cat([
+    torch.cat([target[1] for target in targets], dim=0).unsqueeze(0)
+    for _, _, targets, _ in batch
+  ], dim=0)  # (B, K+1, s)
+
+  target_policy = torch.cat([
+    torch.cat([target[2] for target in targets], dim=0).unsqueeze(0)
+    for _, _, targets, _ in batch
+  ], dim=0)  # (B, K+1, a)
+
+  # print(game_states.shape)
+  # print(actions.shape)
+  # print(weights.shape)
+  # print(target_value.shape)
+  # print(target_reward.shape)
+  # print(target_policy.shape)
+
+  # Initial states
+  initial_states = game_states[:, 0]  # (B, z)
+
+  hidden, reward_logits, policy_logits, value_logits = network.initial_forward_grad(initial_states)
+
+  # hidden         (B, h)
+  # reward_logits  (B, s)
+  # policy_logits  (B, a)
+  # value_logits   (B, s)
+
+  pred_value_logits = []
+  pred_reward_logits = []
+  pred_policy_logits = []
+
+  pred_value_logits.append(value_logits)
+  pred_reward_logits.append(reward_logits)
+  pred_policy_logits.append(policy_logits)
+
+  for k in range(UNROLL_STEPS):
+    hidden, reward_logits, policy_logits, value_logits = network.recurrent_forward_grad(hidden, actions[:, k])
+
+    hidden = scale_gradient(hidden, 0.5)
+
+    pred_value_logits.append(value_logits)
+    pred_reward_logits.append(reward_logits)
+    pred_policy_logits.append(policy_logits)
+
+  pred_value_logits  = torch.stack(pred_value_logits, dim=1)   # (B, K+1, s)
+  pred_reward_logits = torch.stack(pred_reward_logits, dim=1)  # (B, K+1, s)
+  pred_policy_logits = torch.stack(pred_policy_logits, dim=1)  # (B, K+1, a)
+
+  value_log_probs  = F.log_softmax(pred_value_logits, dim=-1)
+  reward_log_probs = F.log_softmax(pred_reward_logits, dim=-1)
+  policy_log_probs = F.log_softmax(pred_policy_logits, dim=-1)
+
+  value_loss = -(value_log_probs * target_value).sum(dim=-1)     # (B, K+1)
+  reward_loss = -(reward_log_probs * target_reward).sum(dim=-1)  # (B, K+1)
+  policy_loss = -(policy_log_probs * target_policy).sum(dim=-1)  # (B, K+1)
+
+  # Ignore reward loss at k=0
+  reward_loss[:, 0] = 0.0
+
+  # total_loss: (B, K+1)
+  total_loss = (
+    VALUE_LOSS_WEIGHT * value_loss +
+    reward_loss +
+    policy_loss
+  ) # (B, K+1)
+
+  # grad_scale: (1, K+1)
+  grad_scale = torch.ones(
+    (1, UNROLL_STEPS + 1),
+    device=total_loss.device
+  )
+  grad_scale[:, 1:] = 1.0 / UNROLL_STEPS
+
+  scaled_loss = total_loss * grad_scale
+  scaled_loss = scaled_loss.sum(dim=1)
+  scaled_loss = weights * scaled_loss
+  loss = scaled_loss.mean()
+
+  loss.backward()
+  torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
+  optimizer.step()
+  network.training_steps += 1
+
+  pred_scalar = support_to_scalar(
+    pred_value_logits.reshape(-1, FULL_SUPPORT_SIZE),
+    is_prob=False
+  ).reshape(BATCH_SIZE, UNROLL_STEPS + 1)
+
+  target_scalar = support_to_scalar(
+    target_value.reshape(-1, FULL_SUPPORT_SIZE),
+    is_prob=True
+  ).reshape(BATCH_SIZE, UNROLL_STEPS + 1)
+
+  new_priorities = torch.abs(pred_scalar - target_scalar)  # (B, K+1)
+
+  losses = (
+    value_loss.mean(dim=1).mean().item(),
+    reward_loss.mean(dim=1).mean().item(),
+    policy_loss.mean(dim=1).mean().item()    
+  )
+
+  return losses, new_priorities.detach().cpu().numpy()
 
 def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple], bridge: Bridge):
   learning_rate = LR_INIT * LR_DECAY_RATE ** (network.training_steps / LR_DECAY_STEPS)

@@ -1,5 +1,6 @@
 from multiprocessing import freeze_support, set_start_method
 import os
+import random
 from typing import Callable
 from mcts import MCTS
 from muzero import muzero
@@ -42,9 +43,9 @@ class Breakout(Environment):
 
     # Initialize state
     self.state[0, IDX.PADDLE_X] = 0.5
-    self.state[0, IDX.BALL_X] = 0.2
+    self.state[0, IDX.BALL_X] = random.random() * 0.8 + 0.1
     self.state[0, IDX.BALL_Y] = 0.5
-    self.state[0, IDX.BALL_VX] = BALL_SPEED
+    self.state[0, IDX.BALL_VX] = BALL_SPEED * random.choice([-1, 1])
     self.state[0, IDX.BALL_VY] = BALL_SPEED
     self.state[0, IDX.BRICK_BEGIN:IDX.BRICK_END] = 1
 
@@ -289,18 +290,20 @@ def play_test_game():
   # network = Network()
   mcts = MCTS(network)
   game = Game(Env=Breakout)
+  game.environment.frame_skip = 1
 
   def get_action():
     with torch.no_grad():
       root = get_root_node(mcts, game)
       mcts.search(root)
-      action = mcts.select_action(root, temperature=0.1)
+      action = mcts.select_action(root)
       return action
 
   live(game, get_action)
 
 def train_breakout():
-  replay_buffer = ReplayBuffer(10000, BATCH_SIZE)
+  # replay_buffer = ReplayBuffer(10000, BATCH_SIZE)
+  replay_buffer = ReplayBuffer.load(REPLAY_BUFFER_PATH, Breakout)
   muzero(replay_buffer, Breakout)
 
 if __name__ == "__main__":

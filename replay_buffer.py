@@ -41,11 +41,16 @@ class ReplayBuffer:
     for i, (game_idx, state_idx) in enumerate(zip(game_idxs, state_idxs)):
       # Get the initial environment state and played actions
       game = self.buffer[game_idx]
-      states = game.states[state_idx:state_idx + unroll_steps + 1]
-      actions = game.actions[state_idx:state_idx + unroll_steps]
+      states = []
+      actions = []
       targets = []
 
+      for j in range(unroll_steps):
+        actions += [game.actions[min(state_idx + j, len(game.actions) - 1)]]
+
       for j in range(unroll_steps + 1):
+        states += [game.states[min(state_idx + j, len(game.states) - 1)]]
+
         # Compute targets
         target_value = game.get_target_value(state_idx + j, td_steps)
         target_reward = game.get_target_reward(state_idx + j)
@@ -54,7 +59,7 @@ class ReplayBuffer:
         # Convert to probability distributions
         target_value = scalar_to_support(target_value)
         target_reward = scalar_to_support(target_reward)
-        target_policy = torch.tensor(target_policy, device=device)
+        target_policy = torch.tensor(target_policy, device=device).unsqueeze(0)
 
         # Add to batch
         targets += [(target_value, target_reward, target_policy)]
@@ -107,3 +112,22 @@ class ReplayBuffer:
       end_idx = min(state_idx + len(priority), len(self.buffer[game_idx].priorities))
       self.buffer[game_idx].priorities[state_idx:end_idx] = priority[:end_idx - state_idx]
       self.buffer[game_idx].priority = np.max(self.buffer[game_idx].priorities)
+
+  @staticmethod
+  def save(buffer, path: str):
+    serialized_buffer = {
+      "games": [Game.serialize(game) for game in buffer.buffer],
+      "capacity": buffer.capacity,
+      "batch_size": buffer.batch_size
+    }
+    np.save(path, serialized_buffer)
+
+  @staticmethod
+  def load(path: str, Env, capacity=10000, batch_size=BATCH_SIZE):
+    try:
+      serialized_buffer = np.load(path, allow_pickle=True).item()
+      buffer = ReplayBuffer(serialized_buffer["capacity"], serialized_buffer["batch_size"])
+      buffer.buffer = [Game.deserialize(game, Env) for game in serialized_buffer["games"]]
+      return buffer
+    except FileNotFoundError:
+      return ReplayBuffer(capacity, batch_size)

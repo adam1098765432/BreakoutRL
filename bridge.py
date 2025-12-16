@@ -26,7 +26,7 @@ class Bridge:
   def send_game(self, game: Game):
     while self.game_queue.full():
       self.game_queue.get()
-    self.game_queue.put(Game.serealize(game))
+    self.game_queue.put(Game.serialize(game))
 
   def receive_game(self, Env):
     return Game.deserialize(self.game_queue.get(), Env)

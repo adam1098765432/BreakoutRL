@@ -2,6 +2,7 @@ from multiprocessing import Process
 import numpy as np
 import torch
 from config import *
+import torch.nn.functional as F
 
 def launch_job(func, *args):
   p = Process(target=func, args=args)
@@ -9,7 +10,7 @@ def launch_job(func, *args):
   p.start()
   return p
 
-def scale_gradient(tensor: torch.Tensor, scale: float):
+def scale_gradient(tensor: torch.Tensor, scale: float) -> torch.Tensor:
   """
   Scales the gradient by a factor.
   """
@@ -45,6 +46,13 @@ def one_hot_action(x: int):
   arr[0,x] = 1
   return arr
 
+def one_hot_action_batched(actions: torch.Tensor, action_size: int = ACTION_SIZE):
+  """
+  actions: (B,) long tensor
+  returns: (B, action_size)
+  """
+  return F.one_hot(actions, num_classes=action_size).float()
+
 def support_to_scalar(x: torch.Tensor, support_size=SUPPORT_SIZE, is_prob=False) -> float:
   """
   Inputs support logits or probabilities (if is_prob is True)
@@ -72,9 +80,9 @@ def support_to_scalar(x: torch.Tensor, support_size=SUPPORT_SIZE, is_prob=False)
     - 1
   )
 
-  return x.item()
+  return x.item() if x.shape[0] == 1 else x
 
-def scalar_to_support(x: float, support_size=SUPPORT_SIZE):
+def scalar_to_support(x: float, support_size=SUPPORT_SIZE) -> torch.Tensor:
   """
   Inputs scalar float
   Outputs support probabilities
