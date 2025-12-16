@@ -118,6 +118,7 @@ class Breakout(Environment):
         ball_top <= paddle_bottom):
         state[0, IDX.BALL_Y] = PADDLE_Y - BALL_RADIUS
         state[0, IDX.BALL_VY] = -state[0, IDX.BALL_VY]
+        reward += 1
 
     # Ball colliding with bricks
     brick_tl = self.pos_to_brick_idx(ball_left, ball_top)
@@ -126,22 +127,22 @@ class Breakout(Environment):
     brick_br = self.pos_to_brick_idx(ball_right, ball_bottom)
 
     if brick_tl is not None and state[0, IDX.BRICK_BEGIN + brick_tl] == 1:
-      reward += 0.1
+      reward += 1.0
       state[0, IDX.BRICK_BEGIN + brick_tl] = 0
       state[0, IDX.BALL_VY] = -state[0, IDX.BALL_VY]
 
     if brick_tr is not None and state[0, IDX.BRICK_BEGIN + brick_tr] == 1:
-      reward += 0.1
+      reward += 1.0
       state[0, IDX.BRICK_BEGIN + brick_tr] = 0
       state[0, IDX.BALL_VY] = -state[0, IDX.BALL_VY]
 
     if brick_bl is not None and state[0, IDX.BRICK_BEGIN + brick_bl] == 1:
-      reward += 0.1
+      reward += 1.0
       state[0, IDX.BRICK_BEGIN + brick_bl] = 0
       state[0, IDX.BALL_VY] = -state[0, IDX.BALL_VY]
 
     if brick_br is not None and state[0, IDX.BRICK_BEGIN + brick_br] == 1:
-      reward += 0.1
+      reward += 1.0
       state[0, IDX.BRICK_BEGIN + brick_br] = 0
       state[0, IDX.BALL_VY] = -state[0, IDX.BALL_VY]
 
