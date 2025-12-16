@@ -235,6 +235,7 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple],
     # Recurrent steps
     for action in actions:
       # The first time this runs, it is ran on the initial hidden state
+      action = torch.tensor(action).to(device).unsqueeze(0)
       hidden_state, reward, policy_logits, value = network.recurrent_forward_grad(hidden_state, action)
       hidden_state = scale_gradient(hidden_state, 0.5)
       predictions += [(1 / len(actions), value, reward, policy_logits, hidden_state)]
