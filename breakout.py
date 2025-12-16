@@ -38,6 +38,8 @@ class Breakout(Environment):
   def __init__(self, device):
     super().__init__(device)
 
+    self.frame_skip = 4
+
     # Initialize state
     self.state[0, IDX.PADDLE_X] = 0.5
     self.state[0, IDX.BALL_X] = 0.2
@@ -61,7 +63,7 @@ class Breakout(Environment):
 
     return int(row * BRICK_COLUMNS + col)
 
-  def step(self, action: int):
+  def _step(self, action: int):
     state = self.state
     reward = 0.001
 
@@ -163,9 +165,7 @@ class Breakout(Environment):
 
     reward = np.clip(reward, -1, 1)
 
-    self.reward = reward
-
-    return state.clone(), reward
+    return state, reward
 
 def render(state: torch.Tensor, screen: pygame.Surface, screen_width, screen_height):
   brick_width = screen_width // BRICK_COLUMNS
@@ -236,6 +236,7 @@ def live(game: Game, get_action: Callable):
   screen = pygame.display.set_mode((screen_width, screen_height))
   clock = pygame.time.Clock()
   running = True
+  total_reward = 0
 
   while running:
     clock.tick(60)
@@ -249,17 +250,26 @@ def live(game: Game, get_action: Callable):
 
     # Update state
     if not game.terminal():
-      game.apply_action(action)
+      _, reward = game.apply_action(action)
+      total_reward += reward
     else:
       game.reset()
+      total_reward = 0
 
     render(game.get_current_state(), screen, screen_width, screen_height)
     
+    # Total reward text
+    font = pygame.font.Font(None, 36)
+    text = font.render(f"Total reward: {total_reward:.2f}", True, (255, 255, 255))
+    screen.blit(text, (10, 10))
+
     pygame.display.flip()
 
   pygame.quit()
 
 def play(game: Game):
+  game.environment.frame_skip = 1
+  
   def get_action():
     action = 2
     if pygame.key.get_pressed()[pygame.K_LEFT]:

@@ -4,11 +4,12 @@ from mcts import Node
 
 class Environment:
   def __init__(self, device):
+    self.frame_skip = 1
     self.device = device
     self.state = torch.zeros(size=(1, STATE_SIZE), device=device)
     self.reward = 0
 
-  def step(self, action: int):
+  def _step(self, action: int):
     """
     Take a step in the environment
     
@@ -18,6 +19,11 @@ class Environment:
     state = torch.zeros(size=(1, STATE_SIZE), device=self.device)
     reward = 0.0
     return state, reward
+
+  def step(self, action: int):
+    for _ in range(self.frame_skip):
+      self.state, self.reward = self._step(action)
+    return self.state.clone(), self.reward
 
   def get_state(self):
     return self.state.clone()
