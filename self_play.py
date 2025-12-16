@@ -49,7 +49,7 @@ def play_game(mcts: MCTS, Env: Environment, bridge: Bridge):
       root = get_root_node(mcts, game)
       mcts.add_exploration_noise(root)
       mcts.search(root)
-      action = mcts.select_action(root, temperature=temp)
+      action = mcts.select_action(root, temp)
       action_histogram[action] += 1
       game.apply(action, root)
 

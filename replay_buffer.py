@@ -73,9 +73,8 @@ class ReplayBuffer:
 
     probabilities = priorities / priorities.sum()
     idxs = np.random.choice(len(self.buffer), p=probabilities, size=num_samples)
-    games = [self.buffer[i] for i in idxs]
-
-    return games, probabilities[idxs].tolist()
+    
+    return idxs, probabilities[idxs].tolist()
 
   def sample_states(self, game_idxs: list[int]) -> tuple[list[int], list[float]]:
     samples = [self.sample_state(game_idx) for game_idx in game_idxs]
