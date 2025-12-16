@@ -76,7 +76,7 @@ def update_weights(optimizer: torch.optim, network: Network, batch: list[tuple],
       
       # Probabilities
       target_value, target_reward, target_policy = target
-      target_hidden_state = network.initial_forward_grad(game_states[i])[0].detach()
+      target_hidden_state = None if i == 0 else network.initial_forward_grad(game_states[i])[0].detach()
 
       # Convert predicted logits to log probabilities
       pred_value_log_probs = F.log_softmax(pred_value_logits, dim=1)
