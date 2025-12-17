@@ -6,7 +6,6 @@ class Environment:
   def __init__(self, device):
     self.frame_skip = 1
     self.device = device
-    self.state = torch.zeros(size=(1, STATE_SIZE), device=device)
     self.reward = 0
 
   def _step(self, action: int):
@@ -16,9 +15,7 @@ class Environment:
     :param action: The action
     :return: The state and reward
     """
-    state = torch.zeros(size=(1, STATE_SIZE), device=self.device)
-    reward = 0.0
-    return state, reward
+    pass
 
   def step(self, action: int):
     total_reward = 0
@@ -27,10 +24,10 @@ class Environment:
       total_reward += reward
     self.state = state
     self.reward = total_reward
-    return state.clone(), total_reward
+    return state[:, :STATE_SIZE].clone(), total_reward
 
   def get_state(self):
-    return self.state.clone()
+    return self.state[:, :STATE_SIZE].clone()
 
   def get_reward(self):
     return self.reward

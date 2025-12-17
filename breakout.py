@@ -16,7 +16,7 @@ import sys
 # Game parameters
 BRICK_ROWS = 7
 BRICK_COLUMNS = 10
-STATE_SIZE = 6 + BRICK_ROWS * BRICK_COLUMNS
+STATE_SIZE = 5 # + BRICK_ROWS * BRICK_COLUMNS
 PADDLE_SPEED = 0.01
 BALL_SPEED = 0.01
 HALF_PADDLE_WIDTH = 0.075
@@ -39,6 +39,7 @@ class Breakout(Environment):
   def __init__(self, device):
     super().__init__(device)
 
+    self.state = torch.zeros(size=(1, IDX.BRICK_END), device=device)
     self.frame_skip = 4
 
     # Initialize state
@@ -292,7 +293,7 @@ def play_test_game():
   # network = Network()
   mcts = MCTS(network)
   game = Game(Env=Breakout)
-  game.environment.frame_skip = 1
+  # game.environment.frame_skip = 1
 
   def get_action():
     with torch.no_grad():

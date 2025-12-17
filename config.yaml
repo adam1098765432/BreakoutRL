@@ -1,6 +1,6 @@
 network_path: "Models/network.pt"
 replay_buffer_path: "Replays/replay_buffer.npy"
-state_size: 76
+state_size: 5
 action_size: 3
 support_size: 10 # Categorical reward and value (see Appendix F of MuZero paper)
 hidden_size: 8
