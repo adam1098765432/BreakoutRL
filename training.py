@@ -49,26 +49,26 @@ def train(replay_buffer: ReplayBuffer, bridge: Bridge, Env=Environment):
 
     # Train network
     batch, game_idx, state_idxs = replay_buffer.sample_batch(UNROLL_STEPS, TD_STEPS)
-    # new_priorities = update_weights(optimizer, network, batch, bridge)
-    losses, new_priorities = update_weights_parallel(optimizer, network, batch)
+    new_priorities = update_weights(optimizer, network, batch, bridge)
+    # losses, new_priorities = update_weights_parallel(optimizer, network, batch)
 
     # Update priorities
-    replay_buffer.update_priorities(game_idx, state_idxs, new_priorities)
+    # replay_buffer.update_priorities(game_idx, state_idxs, new_priorities)
 
     # Logging
-    if bridge.has_log():
-      logs = bridge.receive_log()
-      sections = [
-        f"Step: {network.training_steps:>6d}",
-        f"Value Loss: {losses[0]:.4f}",
-        f"Reward Loss: {losses[1]:.8f}",
-        f"Policy Loss: {losses[2]:.4f}",
-      ]
+    # if bridge.has_log():
+    #   logs = bridge.receive_log()
+    #   sections = [
+    #     f"Step: {network.training_steps:>6d}",
+    #     f"Value Loss: {losses[0]:.4f}",
+    #     f"Reward Loss: {losses[1]:.8f}",
+    #     f"Policy Loss: {losses[2]:.4f}",
+    #   ]
 
-      for k, v in logs.items():
-        sections.append(f"{k}: {v}")
+    #   for k, v in logs.items():
+    #     sections.append(f"{k}: {v}")
 
-      print(" | ".join(sections))
+    #   print(" | ".join(sections))
 
 def update_weights_parallel(optimizer: torch.optim, network: Network, batch: list[tuple]):
   """
@@ -91,6 +91,7 @@ def update_weights_parallel(optimizer: torch.optim, network: Network, batch: lis
     dim=0
   )  # (B, K+1, z)
 
+  print(batch[0][1])
   actions = torch.tensor(
     [a for _, a, _, _ in batch],
     device=device,

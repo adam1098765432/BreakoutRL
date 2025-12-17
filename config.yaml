@@ -3,7 +3,7 @@ replay_buffer_path: "Replays/replay_buffer.npy"
 state_size: 76
 action_size: 3
 support_size: 10 # Categorical reward and value (see Appendix F of MuZero paper)
-hidden_size: 16
+hidden_size: 8
 discount_factor: 0.997
 n_simulations: 30
 max_moves: 2500 # Taken from psudo code
@@ -18,7 +18,7 @@ save_games_every: 1000
 unroll_steps: 5 # Unroll for K=5 steps (see MuZero Appendix G)
 td_steps: 10 # Bootstrap 10 steps into the future (see MuZero Appendix G)
 weight_decay: 0.0001 # Taken from psudo code (L2 regularization)
-batch_size: 256
+batch_size: 16
 num_actors: 10
 dirichlet_alpha: 0.25
 dirichlet_frac: 0.25

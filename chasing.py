@@ -26,12 +26,13 @@ class IDX:
 class Chasing(Environment):
   def __init__(self, device):
     super().__init__(device)
+    self.frame_skip = 6
 
     # Initialize state
-    self.state[0, IDX.BALL_X] = BALL_RADIUS
-    self.state[0, IDX.BALL_Y] = BALL_RADIUS
-    self.state[0, IDX.TARGET_X] = 1 - BALL_RADIUS
-    self.state[0, IDX.TARGET_Y] = 1 - BALL_RADIUS
+    self.state[0, IDX.BALL_X] = random.random() * 0.8 + 0.1
+    self.state[0, IDX.BALL_Y] = random.random() * 0.8 + 0.1
+    self.state[0, IDX.TARGET_X] = random.random() * 0.8 + 0.1
+    self.state[0, IDX.TARGET_Y] = random.random() * 0.8 + 0.1
     self.state[0, IDX.TIME] = 0
 
     self.is_done = False
@@ -48,7 +49,7 @@ class Chasing(Environment):
       state[0, IDX.BALL_X] -= 0.01
     elif action == 1: # Right
       state[0, IDX.BALL_X] += 0.01
-      reward = 1
+      # reward = 1
     elif action == 2: # Up
       state[0, IDX.BALL_Y] -= 0.01
     elif action == 3: # Down
@@ -89,12 +90,12 @@ class Chasing(Environment):
       self.is_done = True
 
     # Reward for getting close to the target
-    # dist = np.sqrt((ball_x - target_x)**2 + (ball_y - target_y)**2)
-    # reward += 1 - dist
+    dist = np.sqrt((ball_x - target_x)**2 + (ball_y - target_y)**2)
+    reward += (2 - dist ** 2) * 0.1
 
     # Reward for hitting the target
-    # if dist < BALL_RADIUS:
-    #   reward += 1
+    if dist < 0.05:
+      reward += 1
 
     reward = np.clip(reward, -1, 1)
     self.reward = reward

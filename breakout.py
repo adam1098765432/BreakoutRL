@@ -43,9 +43,9 @@ class Breakout(Environment):
 
     # Initialize state
     self.state[0, IDX.PADDLE_X] = 0.5
-    self.state[0, IDX.BALL_X] = random.random() * 0.8 + 0.1
+    self.state[0, IDX.BALL_X] = 0.5
     self.state[0, IDX.BALL_Y] = 0.5
-    self.state[0, IDX.BALL_VX] = BALL_SPEED * random.choice([-1, 1])
+    self.state[0, IDX.BALL_VX] = 0
     self.state[0, IDX.BALL_VY] = BALL_SPEED
     self.state[0, IDX.BRICK_BEGIN:IDX.BRICK_END] = 1
 
@@ -121,6 +121,11 @@ class Breakout(Environment):
         ball_top <= paddle_bottom):
         state[0, IDX.BALL_Y] = PADDLE_Y - BALL_RADIUS
         state[0, IDX.BALL_VY] = -state[0, IDX.BALL_VY]
+        ball_to_paddle = (state[0, IDX.BALL_X].item() - state[0, IDX.PADDLE_X].item()) / HALF_PADDLE_WIDTH + random.random() * 0.2 - 0.1
+        state[0, IDX.BALL_VX] += ball_to_paddle * BALL_SPEED * 0.5
+        ball_speed = np.sqrt(state[0, IDX.BALL_VX].item() ** 2 + state[0, IDX.BALL_VY].item() ** 2)
+        state[0, IDX.BALL_VX] = state[0, IDX.BALL_VX].item() / ball_speed * BALL_SPEED
+        state[0, IDX.BALL_VY] = state[0, IDX.BALL_VY].item() / ball_speed * BALL_SPEED
         reward += 1
 
     # Ball colliding with bricks
@@ -133,18 +138,15 @@ class Breakout(Environment):
       reward += 1.0
       state[0, IDX.BRICK_BEGIN + brick_tl] = 0
       state[0, IDX.BALL_VY] = -state[0, IDX.BALL_VY]
-
-    if brick_tr is not None and state[0, IDX.BRICK_BEGIN + brick_tr] == 1:
+    elif brick_tr is not None and state[0, IDX.BRICK_BEGIN + brick_tr] == 1:
       reward += 1.0
       state[0, IDX.BRICK_BEGIN + brick_tr] = 0
       state[0, IDX.BALL_VY] = -state[0, IDX.BALL_VY]
-
-    if brick_bl is not None and state[0, IDX.BRICK_BEGIN + brick_bl] == 1:
+    elif brick_bl is not None and state[0, IDX.BRICK_BEGIN + brick_bl] == 1:
       reward += 1.0
       state[0, IDX.BRICK_BEGIN + brick_bl] = 0
       state[0, IDX.BALL_VY] = -state[0, IDX.BALL_VY]
-
-    if brick_br is not None and state[0, IDX.BRICK_BEGIN + brick_br] == 1:
+    elif brick_br is not None and state[0, IDX.BRICK_BEGIN + brick_br] == 1:
       reward += 1.0
       state[0, IDX.BRICK_BEGIN + brick_br] = 0
       state[0, IDX.BALL_VY] = -state[0, IDX.BALL_VY]
